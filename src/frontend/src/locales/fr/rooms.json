@@ -254,6 +254,27 @@
     "notAvailable": "Les effets vidéo seront bientôt disponibles sur votre navigateur. Nous y travaillons ! En attendant, vous pouvez utiliser Google Chrome pour de meilleures performances ou Firefox :(",
     "heading": "Flou",
     "clear": "Désactiver l'effet",
+    "advanced": {
+      "title": "Paramètres avancés",
+      "model": {
+        "title": "Modèle de segmentation",
+        "landscape": "Landscape (rapide)",
+        "multiclass": "Multiclass (qualité)"
+      },
+      "postProcessing": {
+        "title": "Post-traitement",
+        "sigmoid": "Sigmoid",
+        "morphology": "Morphology",
+        "guidedFilter": "Guided Filter",
+        "ema": "EMA"
+      },
+      "morphology": {
+        "erosion": "Érosion",
+        "dilation": "Dilatation",
+        "opening": "Ouverture",
+        "closing": "Fermeture"
+      }
+    },
     "blur": {
       "title": "Flou d'arrière-plan",
       "status": {

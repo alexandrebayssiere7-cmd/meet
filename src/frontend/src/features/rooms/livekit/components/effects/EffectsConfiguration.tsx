@@ -4,8 +4,11 @@ import { useTranslation } from 'react-i18next'
 import {
   BackgroundProcessorFactory,
   BackgroundProcessorInterface,
+  MorphologyOp,
+  PostProcessingConfig,
   ProcessorConfig,
   ProcessorType,
+  SegmentationModel,
 } from '../blur'
 import { css } from '@/styled-system/css'
 import { Button, Dialog, H, P, Text, ToggleButton } from '@/primitives'
@@ -119,6 +122,65 @@ export const EffectsConfiguration = ({
     userChoices: { processorConfig },
   } = usePersistentUserChoices()
 
+  // ----- Advanced matting settings (model + post-processing toggles) -----
+  const initialModel: SegmentationModel =
+    (processorConfig &&
+      (processorConfig.type === ProcessorType.BLUR ||
+        processorConfig.type === ProcessorType.VIRTUAL) &&
+      processorConfig.model) ||
+    SegmentationModel.LANDSCAPE
+  const initialPP: PostProcessingConfig =
+    (processorConfig &&
+      (processorConfig.type === ProcessorType.BLUR ||
+        processorConfig.type === ProcessorType.VIRTUAL) &&
+      processorConfig.postProcessing) ||
+    {}
+  const [model, setModel] = useState<SegmentationModel>(initialModel)
+  const [sigmoidEnabled, setSigmoidEnabled] = useState(!!initialPP.sigmoid)
+  const [morphologyEnabled, setMorphologyEnabled] = useState(
+    !!initialPP.morphology
+  )
+  const [morphologyOp, setMorphologyOp] = useState<MorphologyOp>(
+    initialPP.morphology?.op ?? 'closing'
+  )
+  const [morphologyKernel, setMorphologyKernel] = useState<3 | 5 | 7>(
+    initialPP.morphology?.kernelSize ?? 3
+  )
+  const [guidedFilterEnabled, setGuidedFilterEnabled] = useState(
+    !!initialPP.guidedFilter
+  )
+  const [emaEnabled, setEmaEnabled] = useState(!!initialPP.ema)
+
+  const buildPostProcessing = useCallback((): PostProcessingConfig => {
+    const cfg: PostProcessingConfig = {}
+    if (sigmoidEnabled) cfg.sigmoid = { steepness: 10, threshold: 0.5 }
+    if (morphologyEnabled)
+      cfg.morphology = { op: morphologyOp, kernelSize: morphologyKernel }
+    if (guidedFilterEnabled) cfg.guidedFilter = { radius: 4, eps: 0.01 }
+    if (emaEnabled) cfg.ema = { alpha: 0.5 }
+    return cfg
+  }, [
+    sigmoidEnabled,
+    morphologyEnabled,
+    morphologyOp,
+    morphologyKernel,
+    guidedFilterEnabled,
+    emaEnabled,
+  ])
+
+  const withAdvanced = useCallback(
+    (config: ProcessorConfig): ProcessorConfig => {
+      if (
+        config.type === ProcessorType.BLUR ||
+        config.type === ProcessorType.VIRTUAL
+      ) {
+        return { ...config, model, postProcessing: buildPostProcessing() }
+      }
+      return config
+    },
+    [model, buildPostProcessing]
+  )
+
   const selectedId = useMemo(
     () =>
       processorConfig ? deriveIdFromProcessorConfig(processorConfig) : 'none',
@@ -186,7 +248,8 @@ export const EffectsConfiguration = ({
   )
 
   const toggleEffect = useCallback(
-    async (config: ProcessorConfig) => {
+    async (rawConfig: ProcessorConfig) => {
+      const config = withAdvanced(rawConfig)
       setProcessorPending(true)
       const wasSelectedBeforeToggle =
         selectedId === deriveIdFromProcessorConfig(config)
@@ -254,8 +317,34 @@ export const EffectsConfiguration = ({
       toggle,
       updateEffectStatusMessage,
       videoTrack,
+      withAdvanced,
     ]
   )
+
+  // When advanced settings change while an effect is active, update in place.
+  useEffect(() => {
+    if (!videoTrack) return
+    if (!processorConfig) return
+    if (
+      processorConfig.type !== ProcessorType.BLUR &&
+      processorConfig.type !== ProcessorType.VIRTUAL
+    )
+      return
+    const processor =
+      videoTrack.getProcessor() as BackgroundProcessorInterface | undefined
+    if (!processor) return
+    const newConfig = withAdvanced(processorConfig)
+    processor.update(newConfig).then(() => saveProcessorConfig(newConfig))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    model,
+    sigmoidEnabled,
+    morphologyEnabled,
+    morphologyOp,
+    morphologyKernel,
+    guidedFilterEnabled,
+    emaEnabled,
+  ])
 
   const { data: appConfig } = useConfig()
   const { isLoggedIn } = useUser()
@@ -901,6 +990,181 @@ export const EffectsConfiguration = ({
                       />
                     </VisualOnlyTooltip>
                   ))}
+                </div>
+              </div>
+
+              {/* Advanced matting settings */}
+              <div
+                className={css({
+                  marginTop: '1.5rem',
+                  paddingTop: '1rem',
+                  borderTop: '1px solid greyscale.250',
+                })}
+              >
+                <H
+                  lvl={2}
+                  style={{ marginBottom: '0.6rem' }}
+                  variant="bodyXsBold"
+                >
+                  {t('advanced.title')}
+                </H>
+
+                <H
+                  lvl={3}
+                  style={{ marginBottom: '0.4rem' }}
+                  variant="bodyXsMedium"
+                >
+                  {t('advanced.model.title')}
+                </H>
+                <div
+                  className={css({
+                    display: 'flex',
+                    gap: '1rem',
+                    marginBottom: '1rem',
+                  })}
+                >
+                  <label
+                    className={css({
+                      display: 'flex',
+                      gap: '0.4rem',
+                      alignItems: 'center',
+                      cursor: 'pointer',
+                    })}
+                  >
+                    <input
+                      type="radio"
+                      name="matting-model"
+                      checked={model === SegmentationModel.LANDSCAPE}
+                      onChange={() => setModel(SegmentationModel.LANDSCAPE)}
+                    />
+                    <Text variant="sm">{t('advanced.model.landscape')}</Text>
+                  </label>
+                  <label
+                    className={css({
+                      display: 'flex',
+                      gap: '0.4rem',
+                      alignItems: 'center',
+                      cursor: 'pointer',
+                    })}
+                  >
+                    <input
+                      type="radio"
+                      name="matting-model"
+                      checked={model === SegmentationModel.MULTICLASS}
+                      onChange={() => setModel(SegmentationModel.MULTICLASS)}
+                    />
+                    <Text variant="sm">{t('advanced.model.multiclass')}</Text>
+                  </label>
+                </div>
+
+                <H
+                  lvl={3}
+                  style={{ marginBottom: '0.4rem' }}
+                  variant="bodyXsMedium"
+                >
+                  {t('advanced.postProcessing.title')}
+                </H>
+                <div
+                  className={css({
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '0.35rem',
+                  })}
+                >
+                  <label
+                    className={css({
+                      display: 'flex',
+                      gap: '0.4rem',
+                      alignItems: 'center',
+                      cursor: 'pointer',
+                    })}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={sigmoidEnabled}
+                      onChange={(e) => setSigmoidEnabled(e.target.checked)}
+                    />
+                    <Text variant="sm">{t('advanced.postProcessing.sigmoid')}</Text>
+                  </label>
+                  <div
+                    className={css({
+                      display: 'flex',
+                      gap: '0.5rem',
+                      alignItems: 'center',
+                      flexWrap: 'wrap',
+                    })}
+                  >
+                    <label
+                      className={css({
+                        display: 'flex',
+                        gap: '0.4rem',
+                        alignItems: 'center',
+                        cursor: 'pointer',
+                      })}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={morphologyEnabled}
+                        onChange={(e) => setMorphologyEnabled(e.target.checked)}
+                      />
+                      <Text variant="sm">{t('advanced.postProcessing.morphology')}</Text>
+                    </label>
+                    <select
+                      value={morphologyOp}
+                      disabled={!morphologyEnabled}
+                      onChange={(e) =>
+                        setMorphologyOp(e.target.value as MorphologyOp)
+                      }
+                    >
+                      <option value="erosion">{t('advanced.morphology.erosion')}</option>
+                      <option value="dilation">{t('advanced.morphology.dilation')}</option>
+                      <option value="opening">{t('advanced.morphology.opening')}</option>
+                      <option value="closing">{t('advanced.morphology.closing')}</option>
+                    </select>
+                    <select
+                      value={morphologyKernel}
+                      disabled={!morphologyEnabled}
+                      onChange={(e) =>
+                        setMorphologyKernel(
+                          Number(e.target.value) as 3 | 5 | 7
+                        )
+                      }
+                    >
+                      <option value={3}>3×3</option>
+                      <option value={5}>5×5</option>
+                      <option value={7}>7×7</option>
+                    </select>
+                  </div>
+                  <label
+                    className={css({
+                      display: 'flex',
+                      gap: '0.4rem',
+                      alignItems: 'center',
+                      cursor: 'pointer',
+                    })}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={guidedFilterEnabled}
+                      onChange={(e) => setGuidedFilterEnabled(e.target.checked)}
+                    />
+                    <Text variant="sm">{t('advanced.postProcessing.guidedFilter')}</Text>
+                  </label>
+                  <label
+                    className={css({
+                      display: 'flex',
+                      gap: '0.4rem',
+                      alignItems: 'center',
+                      cursor: 'pointer',
+                    })}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={emaEnabled}
+                      onChange={(e) => setEmaEnabled(e.target.checked)}
+                    />
+                    <Text variant="sm">{t('advanced.postProcessing.ema')}</Text>
+                  </label>
                 </div>
               </div>
             </div>

@@ -254,6 +254,27 @@
     "notAvailable": "Video effects will be available soon on your browser. We're working on it! In the meantime, you can use Google Chrome for best performance or Firefox :(",
     "heading": "Blur",
     "clear": "Disable effect",
+    "advanced": {
+      "title": "Advanced settings",
+      "model": {
+        "title": "Segmentation model",
+        "landscape": "Landscape (fast)",
+        "multiclass": "Multiclass (quality)"
+      },
+      "postProcessing": {
+        "title": "Post-processing",
+        "sigmoid": "Sigmoid",
+        "morphology": "Morphology",
+        "guidedFilter": "Guided Filter",
+        "ema": "EMA"
+      },
+      "morphology": {
+        "erosion": "Erosion",
+        "dilation": "Dilation",
+        "opening": "Opening",
+        "closing": "Closing"
+      }
+    },
     "blur": {
       "title": "Background blur",
       "status": {

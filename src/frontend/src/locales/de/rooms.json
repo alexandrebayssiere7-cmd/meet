@@ -254,6 +254,27 @@
     "notAvailable": "Videoeffekte werden bald in deinem Browser verfügbar sein. Wir arbeiten daran! In der Zwischenzeit kannst du Google Chrome für die beste Leistung oder Firefox verwenden :(",
     "heading": "Unschärfe",
     "clear": "Effekt deaktivieren",
+    "advanced": {
+      "title": "Erweiterte Einstellungen",
+      "model": {
+        "title": "Segmentierungsmodell",
+        "landscape": "Landscape (schnell)",
+        "multiclass": "Multiclass (Qualität)"
+      },
+      "postProcessing": {
+        "title": "Nachbearbeitung",
+        "sigmoid": "Sigmoid",
+        "morphology": "Morphology",
+        "guidedFilter": "Guided Filter",
+        "ema": "EMA"
+      },
+      "morphology": {
+        "erosion": "Erosion",
+        "dilation": "Dilatation",
+        "opening": "Öffnung",
+        "closing": "Schließung"
+      }
+    },
     "blur": {
       "title": "Hintergrundunschärfe",
       "status": {

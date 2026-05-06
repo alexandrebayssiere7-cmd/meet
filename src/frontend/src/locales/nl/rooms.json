@@ -254,6 +254,27 @@
     "notAvailable": "Video-effecten zijn binnenkort beschikbaar in uw browser. We werken eraan! In de tussentijd kunt u Google Chrome gebruiken voor de beste prestaties of Firefox :(",
     "heading": "Vervaging",
     "clear": "Effect uitschakelen",
+    "advanced": {
+      "title": "Geavanceerde instellingen",
+      "model": {
+        "title": "Segmentatiemodel",
+        "landscape": "Landscape (snel)",
+        "multiclass": "Multiclass (kwaliteit)"
+      },
+      "postProcessing": {
+        "title": "Nabewerking",
+        "sigmoid": "Sigmoid",
+        "morphology": "Morphology",
+        "guidedFilter": "Guided Filter",
+        "ema": "EMA"
+      },
+      "morphology": {
+        "erosion": "Erosie",
+        "dilation": "Dilatatie",
+        "opening": "Opening",
+        "closing": "Sluiting"
+      }
+    },
     "blur": {
       "title": "Achtergrondvervaging",
       "status": {
