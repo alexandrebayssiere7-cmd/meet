@@ -220,6 +220,8 @@ export const EffectsConfiguration = ({
           saveProcessorConfig(undefined)
         } else if (
           !processor ||
+          processor.options.type !== config.type ||
+          (processor.options.type === ProcessorType.BLUR && config.type === ProcessorType.BLUR && processor.options.blurRadius !== config.blurRadius) ||
           (processor.options.type !== config.type &&
             !BackgroundProcessorFactory.hasModernApiSupport())
         ) {
@@ -626,10 +628,24 @@ export const EffectsConfiguration = ({
                 lvl={2}
                 style={{
                   marginBottom: '1rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
                 }}
                 variant="bodyXsBold"
               >
                 {t('blur.title')}
+                <span className={css({
+                  fontSize: '9px',
+                  backgroundColor: 'green.600',
+                  color: 'white',
+                  padding: '2px 4px',
+                  borderRadius: '4px',
+                  lineHeight: '1',
+                  fontWeight: 'bold'
+                })}>
+                  HQ
+                </span>
               </H>
               <div>
                 <div

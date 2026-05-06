@@ -1,25 +1,29 @@
 import { ProcessorOptions, Track } from 'livekit-client'
 import {
-  BackgroundBlur,
   ProcessorWrapper,
   VirtualBackground,
 } from '@livekit/track-processors'
+import { createLiveKitBlurProcessor, LiveKitBlurProcessor } from 'gregblur/livekit'
 import { ProcessorConfig, BackgroundProcessorInterface, ProcessorType } from '.'
 
 export class UnifiedBackgroundTrackProcessor implements BackgroundProcessorInterface {
-  processor: ProcessorWrapper<{ imagePath?: string; blurRadius?: number }>
+  processor: ProcessorWrapper<{ imagePath?: string; blurRadius?: number }> | LiveKitBlurProcessor
   opts: ProcessorConfig
   processorType: ProcessorType
 
   constructor(opts: ProcessorConfig) {
     this.opts = opts
+    this.processorType = opts.type
 
     if (opts.type === 'virtual') {
-      this.processorType = ProcessorType.VIRTUAL
       this.processor = VirtualBackground(opts.imagePath)
     } else if (opts.type === 'blur') {
-      this.processorType = ProcessorType.BLUR
-      this.processor = BackgroundBlur(opts.blurRadius)
+      console.log('🚀 Initializing High-Quality Blur with Gregblur')
+      this.processor = createLiveKitBlurProcessor({
+        blurRadius: opts.blurRadius,
+        initialEnabled: true,
+        segmentationModel: 'selfie-multiclass-256',
+      })
     } else {
       throw new Error(
         'Must provide either imagePath for virtual background or blurRadius for blur'
@@ -42,20 +46,12 @@ export class UnifiedBackgroundTrackProcessor implements BackgroundProcessorInter
   async update(opts: ProcessorConfig): Promise<void> {
     this.opts = opts
 
-    const newProcessorType =
-      opts.type === 'virtual' ? ProcessorType.VIRTUAL : ProcessorType.BLUR
-
-    if (newProcessorType !== this.processorType) {
-      this.processorType = newProcessorType
-      if (newProcessorType === ProcessorType.VIRTUAL) {
-        this.processor.name = 'virtual-background'
-      } else {
-        this.processor.name = 'background-blur'
-      }
+    // Since EffectsConfiguration recreates the processor on type or blur radius changes,
+    // this update() is primarily for updating virtual background images seamlessly.
+    if (this.processorType === ProcessorType.VIRTUAL && opts.type === 'virtual') {
+      const wrapper = this.processor as ProcessorWrapper<{ imagePath?: string; blurRadius?: number }>
+      await wrapper.updateTransformerOptions({ imagePath: opts.imagePath })
     }
-    await this.processor.updateTransformerOptions(
-      opts as { imagePath?: string; blurRadius?: number }
-    )
   }
 
   get name() {
