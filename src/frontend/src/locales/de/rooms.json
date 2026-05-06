@@ -273,7 +273,8 @@
         "dilation": "Dilatation",
         "opening": "Öffnung",
         "closing": "Schließung"
-      }
+      },
+      "apply": "Anwenden"
     },
     "blur": {
       "title": "Hintergrundunschärfe",

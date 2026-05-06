@@ -321,10 +321,8 @@ export const EffectsConfiguration = ({
     ]
   )
 
-  // When advanced settings change while an effect is active, update in place.
-  useEffect(() => {
-    if (!videoTrack) return
-    if (!processorConfig) return
+  const applyAdvancedSettings = useCallback(async () => {
+    if (!videoTrack || !processorConfig) return
     if (
       processorConfig.type !== ProcessorType.BLUR &&
       processorConfig.type !== ProcessorType.VIRTUAL
@@ -334,17 +332,14 @@ export const EffectsConfiguration = ({
       videoTrack.getProcessor() as BackgroundProcessorInterface | undefined
     if (!processor) return
     const newConfig = withAdvanced(processorConfig)
-    processor.update(newConfig).then(() => saveProcessorConfig(newConfig))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    model,
-    sigmoidEnabled,
-    morphologyEnabled,
-    morphologyOp,
-    morphologyKernel,
-    guidedFilterEnabled,
-    emaEnabled,
-  ])
+    setProcessorPending(true)
+    try {
+      await processor.update(newConfig)
+      saveProcessorConfig(newConfig)
+    } finally {
+      setTimeout(() => setProcessorPending(false))
+    }
+  }, [videoTrack, processorConfig, withAdvanced, saveProcessorConfig])
 
   const { data: appConfig } = useConfig()
   const { isLoggedIn } = useUser()
@@ -1166,6 +1161,19 @@ export const EffectsConfiguration = ({
                     <Text variant="sm">{t('advanced.postProcessing.ema')}</Text>
                   </label>
                 </div>
+                {processorConfig &&
+                  (processorConfig.type === ProcessorType.BLUR ||
+                    processorConfig.type === ProcessorType.VIRTUAL) && (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onPress={applyAdvancedSettings}
+                      isDisabled={processorOptions.isDisabled}
+                      style={{ marginTop: '0.75rem' }}
+                    >
+                      {t('advanced.apply')}
+                    </Button>
+                  )}
               </div>
             </div>
           </div>

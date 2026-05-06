@@ -273,7 +273,8 @@
         "dilation": "Dilatatie",
         "opening": "Opening",
         "closing": "Sluiting"
-      }
+      },
+      "apply": "Toepassen"
     },
     "blur": {
       "title": "Achtergrondvervaging",

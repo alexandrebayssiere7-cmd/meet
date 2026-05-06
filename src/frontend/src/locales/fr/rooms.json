@@ -273,7 +273,8 @@
         "dilation": "Dilatation",
         "opening": "Ouverture",
         "closing": "Fermeture"
-      }
+      },
+      "apply": "Appliquer"
     },
     "blur": {
       "title": "Flou d'arrière-plan",

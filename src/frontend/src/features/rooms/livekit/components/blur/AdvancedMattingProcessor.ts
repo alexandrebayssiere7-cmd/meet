@@ -67,19 +67,14 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
   }
 
   async init(opts: ProcessorOptions<Track.Kind>) {
-    console.log('[AMP] init start', opts)
     if (!opts.element) {
       throw new Error('Element is required for processing')
     }
     this.source = opts.track as MediaStreamTrack
     this.sourceSettings = this.source!.getSettings()
-    console.log('[AMP] sourceSettings', this.sourceSettings)
     this.videoElement = opts.element as HTMLVideoElement
 
     this._initVirtualBackgroundImage()
-    console.log('[AMP] initializing segmenter...')
-    await this._initSegmenter()
-    console.log('[AMP] segmenter ready, inputSize=', this.processingWidth, 'x', this.processingHeight)
     this._initPipeline()
     this._createMainCanvas()
     this._createMaskCanvas()
@@ -89,7 +84,6 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     }
     const stream = this.outputCanvas!.captureStream(30)
     const tracks = stream.getVideoTracks()
-    console.log('[AMP] captureStream tracks:', tracks.length, tracks)
     if (tracks.length === 0) {
       throw new Error('[AMP] No tracks found in captureStream()')
     }
@@ -100,7 +94,10 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       this.processingHeight
     )
     this._initWorker()
-    console.log('[AMP] init complete, processedTrack=', this.processedTrack)
+
+    // Initialize MediaPipe in the background so init() returns immediately.
+    // process() falls back to passthrough until the segmenter is ready.
+    this._initSegmenterBackground()
   }
 
   async update(opts: ProcessorConfig): Promise<void> {
@@ -114,17 +111,10 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
 
     if (newModel !== prevModel) {
       this.segmenter?.destroy()
-      await this._initSegmenter()
-      // input size may have changed → recreate ImageData and mask canvas
-      this.segmentationMask = new ImageData(
-        this.processingWidth,
-        this.processingHeight
-      )
-      this.segmentationMaskCanvas?.setAttribute('width', '' + this.processingWidth)
-      this.segmentationMaskCanvas?.setAttribute(
-        'height',
-        '' + this.processingHeight
-      )
+      this.segmenter = undefined
+      this.currentModel = undefined
+      // Re-init in the background; process() falls back to passthrough until ready.
+      this._initSegmenterBackground()
     }
     this._initPipeline()
   }
@@ -148,11 +138,35 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
 
   private async _initSegmenter() {
     const model = this._getModel(this.options)
+    const seg = createSegmenter(model)
+    await seg.init()
+    // Assign only after init() completes so process() never sees a partially-initialised segmenter.
+    this.segmenter = seg
     this.currentModel = model
-    this.segmenter = createSegmenter(model)
-    await this.segmenter.init()
     this.processingWidth = this.segmenter.inputSize.width
     this.processingHeight = this.segmenter.inputSize.height
+  }
+
+  private async _initSegmenterBackground() {
+    try {
+      await this._initSegmenter()
+      // If input dimensions changed, resize the mask buffers.
+      if (
+        this.segmentationMask &&
+        (this.segmentationMask.width !== this.processingWidth ||
+          this.segmentationMask.height !== this.processingHeight)
+      ) {
+        this.segmentationMask = new ImageData(
+          this.processingWidth,
+          this.processingHeight
+        )
+        this.segmentationMaskCanvas?.setAttribute('width', '' + this.processingWidth)
+        this.segmentationMaskCanvas?.setAttribute('height', '' + this.processingHeight)
+      }
+    } catch (e) {
+      console.error('[AMP] segmenter init failed — running in passthrough mode', e)
+      this.segmenter = undefined
+    }
   }
 
   private _initPipeline() {
@@ -265,10 +279,17 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
 
   async process() {
     if (!this.videoElement || this.videoElement.videoWidth === 0) {
-      console.warn('[AMP] process skipped: video not ready, readyState=', this.videoElement?.readyState)
       this.timerWorker?.postMessage({ id: SET_TIMEOUT, timeMs: 1000 / 30 })
       return
     }
+
+    // Segmenter not yet ready (still loading) — passthrough to keep video visible.
+    if (!this.segmenter) {
+      this._drawPassthrough()
+      this.timerWorker?.postMessage({ id: SET_TIMEOUT, timeMs: 1000 / 30 })
+      return
+    }
+
     try {
       this.sizeSource()
       const rawMask = await this.segmenter!.segment(
@@ -285,8 +306,18 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       this.composite()
     } catch (e) {
       console.error('[AMP] process error', e)
+      // Keep video visible even if the pipeline fails.
+      this._drawPassthrough()
     }
     this.timerWorker?.postMessage({ id: SET_TIMEOUT, timeMs: 1000 / 30 })
+  }
+
+  private _drawPassthrough() {
+    const w = this.outputCanvas!.width
+    const h = this.outputCanvas!.height
+    this.outputCanvasCtx!.globalCompositeOperation = 'copy'
+    this.outputCanvasCtx!.filter = 'none'
+    this.outputCanvasCtx!.drawImage(this.videoElement!, 0, 0, w, h)
   }
 
   private _createMainCanvas() {
@@ -296,8 +327,8 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     if (!canvas) {
       canvas = this._createCanvas(
         BLUR_CANVAS_ID,
-        this.sourceSettings!.width ?? 1280,
-        this.sourceSettings!.height ?? 720
+        this.sourceSettings!.width || 1280,
+        this.sourceSettings!.height || 720
       )
     }
     this.outputCanvas = canvas

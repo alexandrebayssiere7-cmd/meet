@@ -273,7 +273,8 @@
         "dilation": "Dilation",
         "opening": "Opening",
         "closing": "Closing"
-      }
+      },
+      "apply": "Apply"
     },
     "blur": {
       "title": "Background blur",
