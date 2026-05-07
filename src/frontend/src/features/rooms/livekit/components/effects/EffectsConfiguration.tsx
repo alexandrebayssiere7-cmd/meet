@@ -4,7 +4,6 @@ import { useTranslation } from 'react-i18next'
 import {
   BackgroundProcessorFactory,
   BackgroundProcessorInterface,
-  MorphologyOp,
   PostProcessingConfig,
   ProcessorConfig,
   ProcessorType,
@@ -36,6 +35,7 @@ import { useConfig } from '@/api/useConfig.ts'
 import { usePersistentUserChoices } from '@/features/rooms/livekit/hooks/usePersistentUserChoices.ts'
 import { proxy, useSnapshot } from 'valtio'
 import { Spinner } from '@/primitives/Spinner.tsx'
+import { useMattingErrors } from '../blur/errors/MattingErrorStore'
 
 enum BlurRadius {
   NONE = 0,
@@ -89,6 +89,58 @@ function deriveIdFromProcessorConfig(config: ProcessorConfig) {
   throw new Error(`Unknown config type in config: ${config}`)
 }
 
+type SliderRowProps = {
+  label: string
+  displayValue: string
+  value: number
+  min: number
+  max: number
+  step: number
+  disabled?: boolean
+  onChange: (v: number) => void
+}
+
+const SliderRow = ({
+  label,
+  displayValue,
+  value,
+  min,
+  max,
+  step,
+  disabled,
+  onChange,
+}: SliderRowProps) => (
+  <label
+    className={css({
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '0.15rem',
+      fontSize: 'sm',
+      paddingLeft: '1.4rem',
+      marginTop: '0.15rem',
+    })}
+    style={{ opacity: disabled ? 0.5 : 1 }}
+  >
+    <span>
+      {label} : <strong>{displayValue}</strong>
+    </span>
+    <input
+      type="range"
+      min={min}
+      max={max}
+      step={step}
+      value={value}
+      disabled={disabled}
+      onChange={(e) => onChange(Number(e.target.value))}
+      className={css({
+        width: '100%',
+        cursor: 'pointer',
+        _disabled: { cursor: 'not-allowed' },
+      })}
+    />
+  </label>
+)
+
 // We use a valtio store so that the state is persisted between the join room
 // and the actual room
 const uploadNotPossibleLocalState = proxy({
@@ -137,35 +189,63 @@ export const EffectsConfiguration = ({
     {}
   const [model, setModel] = useState<SegmentationModel>(initialModel)
   const [sigmoidEnabled, setSigmoidEnabled] = useState(!!initialPP.sigmoid)
-  const [morphologyEnabled, setMorphologyEnabled] = useState(
-    !!initialPP.morphology
+  const [sigmoidSteepness, setSigmoidSteepness] = useState<number>(
+    initialPP.sigmoid?.steepness ?? 10
   )
-  const [morphologyOp, setMorphologyOp] = useState<MorphologyOp>(
-    initialPP.morphology?.op ?? 'closing'
+  const [sigmoidThreshold, setSigmoidThreshold] = useState<number>(
+    initialPP.sigmoid?.threshold ?? 0.5
   )
-  const [morphologyKernel, setMorphologyKernel] = useState<3 | 5 | 7>(
-    initialPP.morphology?.kernelSize ?? 3
+  const [erosionEnabled, setErosionEnabled] = useState(!!initialPP.erosion)
+  const [erosionPixels, setErosionPixels] = useState<number>(
+    initialPP.erosion?.pixels ?? 2
   )
   const [guidedFilterEnabled, setGuidedFilterEnabled] = useState(
     !!initialPP.guidedFilter
   )
+  const [guidedRadius, setGuidedRadius] = useState<number>(
+    initialPP.guidedFilter?.radius ?? 4
+  )
+  // Eps spans 4 decades — slider exposes log10(eps) in [-4, -1.3].
+  const [guidedEpsLog, setGuidedEpsLog] = useState<number>(
+    Math.log10(initialPP.guidedFilter?.eps ?? 0.01)
+  )
   const [emaEnabled, setEmaEnabled] = useState(!!initialPP.ema)
+  const [emaAlpha, setEmaAlpha] = useState<number>(
+    initialPP.ema?.alpha ?? 0.5
+  )
+
+  // Continuous blur radius slider; only meaningful when a blur effect is selected.
+  const initialBlurRadius =
+    processorConfig?.type === ProcessorType.BLUR
+      ? processorConfig.blurRadius
+      : 10
+  const [blurRadiusValue, setBlurRadiusValue] =
+    useState<number>(initialBlurRadius)
 
   const buildPostProcessing = useCallback((): PostProcessingConfig => {
     const cfg: PostProcessingConfig = {}
-    if (sigmoidEnabled) cfg.sigmoid = { steepness: 10, threshold: 0.5 }
-    if (morphologyEnabled)
-      cfg.morphology = { op: morphologyOp, kernelSize: morphologyKernel }
-    if (guidedFilterEnabled) cfg.guidedFilter = { radius: 4, eps: 0.01 }
-    if (emaEnabled) cfg.ema = { alpha: 0.5 }
+    if (sigmoidEnabled)
+      cfg.sigmoid = { steepness: sigmoidSteepness, threshold: sigmoidThreshold }
+    if (erosionEnabled && erosionPixels > 0)
+      cfg.erosion = { pixels: erosionPixels }
+    if (guidedFilterEnabled)
+      cfg.guidedFilter = {
+        radius: guidedRadius,
+        eps: Math.pow(10, guidedEpsLog),
+      }
+    if (emaEnabled) cfg.ema = { alpha: emaAlpha }
     return cfg
   }, [
     sigmoidEnabled,
-    morphologyEnabled,
-    morphologyOp,
-    morphologyKernel,
+    sigmoidSteepness,
+    sigmoidThreshold,
+    erosionEnabled,
+    erosionPixels,
     guidedFilterEnabled,
+    guidedRadius,
+    guidedEpsLog,
     emaEnabled,
+    emaAlpha,
   ])
 
   const withAdvanced = useCallback(
@@ -188,6 +268,7 @@ export const EffectsConfiguration = ({
   )
 
   const uploadNotPossibleSnap = useSnapshot(uploadNotPossibleLocalState)
+  const mattingErrors = useMattingErrors()
 
   const announceEffectStatusMessage = useCallback(
     (message: string) => {
@@ -335,11 +416,47 @@ export const EffectsConfiguration = ({
     setProcessorPending(true)
     try {
       await processor.update(newConfig)
+      // Wait until the new segmenter is fully loaded before clearing the spinner.
+      await processor.waitForReady?.()
       saveProcessorConfig(newConfig)
     } finally {
       setTimeout(() => setProcessorPending(false))
     }
   }, [videoTrack, processorConfig, withAdvanced, saveProcessorConfig])
+
+  // Live blur radius slider: debounced apply that doesn't go through toggleEffect
+  // (which would stop the processor when slider sits on the same value as selected).
+  const blurDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const applyBlurRadius = useCallback(
+    (radius: number) => {
+      setBlurRadiusValue(radius)
+      if (blurDebounceRef.current) clearTimeout(blurDebounceRef.current)
+      blurDebounceRef.current = setTimeout(async () => {
+        const config = withAdvanced({
+          type: ProcessorType.BLUR,
+          blurRadius: radius,
+        })
+        const processor = videoTrack?.getProcessor() as
+          | BackgroundProcessorInterface
+          | undefined
+        if (processor && processor.options.type === ProcessorType.BLUR) {
+          await processor.update(config)
+          saveProcessorConfig(config)
+        } else {
+          toggleEffect(config)
+        }
+      }, 200)
+    },
+    [videoTrack, withAdvanced, saveProcessorConfig, toggleEffect]
+  )
+
+  // Keep the slider in sync when the user picks a preset button (Light/Strong)
+  // or when blur is disabled.
+  useEffect(() => {
+    if (processorConfig?.type === ProcessorType.BLUR) {
+      setBlurRadiusValue(processorConfig.blurRadius)
+    }
+  }, [processorConfig])
 
   const { data: appConfig } = useConfig()
   const { isLoggedIn } = useUser()
@@ -705,6 +822,13 @@ export const EffectsConfiguration = ({
         )}
         {isSupported ? (
           <div>
+            {mattingErrors.filter(e => e.level === 'error').map(e => (
+              <Information key={e.code} style={{ marginBottom: '1rem' }}>
+                <Text variant="bodyXs">
+                  {t(`matting.errors.${e.code}`, { defaultValue: e.detail ?? e.code })}
+                </Text>
+              </Information>
+            ))}
             <div>
               <H
                 lvl={2}
@@ -737,6 +861,18 @@ export const EffectsConfiguration = ({
                       <Icon />
                     </ToggleButton>
                   ))}
+                </div>
+                <div className={css({ marginTop: '0.6rem' })}>
+                  <SliderRow
+                    label={t('advanced.params.blurRadius')}
+                    displayValue={`${blurRadiusValue} px`}
+                    value={blurRadiusValue}
+                    min={1}
+                    max={50}
+                    step={1}
+                    disabled={processorOptions.isDisabled}
+                    onChange={applyBlurRadius}
+                  />
                 </div>
               </div>
 
@@ -1081,55 +1217,51 @@ export const EffectsConfiguration = ({
                     />
                     <Text variant="sm">{t('advanced.postProcessing.sigmoid')}</Text>
                   </label>
-                  <div
+                  <SliderRow
+                    label={t('advanced.params.sigmoidSteepness')}
+                    displayValue={sigmoidSteepness.toFixed(1)}
+                    value={sigmoidSteepness}
+                    min={0.5}
+                    max={20}
+                    step={0.5}
+                    disabled={!sigmoidEnabled}
+                    onChange={setSigmoidSteepness}
+                  />
+                  <SliderRow
+                    label={t('advanced.params.sigmoidThreshold')}
+                    displayValue={sigmoidThreshold.toFixed(2)}
+                    value={sigmoidThreshold}
+                    min={0.2}
+                    max={0.8}
+                    step={0.05}
+                    disabled={!sigmoidEnabled}
+                    onChange={setSigmoidThreshold}
+                  />
+                  <label
                     className={css({
                       display: 'flex',
-                      gap: '0.5rem',
+                      gap: '0.4rem',
                       alignItems: 'center',
-                      flexWrap: 'wrap',
+                      cursor: 'pointer',
                     })}
                   >
-                    <label
-                      className={css({
-                        display: 'flex',
-                        gap: '0.4rem',
-                        alignItems: 'center',
-                        cursor: 'pointer',
-                      })}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={morphologyEnabled}
-                        onChange={(e) => setMorphologyEnabled(e.target.checked)}
-                      />
-                      <Text variant="sm">{t('advanced.postProcessing.morphology')}</Text>
-                    </label>
-                    <select
-                      value={morphologyOp}
-                      disabled={!morphologyEnabled}
-                      onChange={(e) =>
-                        setMorphologyOp(e.target.value as MorphologyOp)
-                      }
-                    >
-                      <option value="erosion">{t('advanced.morphology.erosion')}</option>
-                      <option value="dilation">{t('advanced.morphology.dilation')}</option>
-                      <option value="opening">{t('advanced.morphology.opening')}</option>
-                      <option value="closing">{t('advanced.morphology.closing')}</option>
-                    </select>
-                    <select
-                      value={morphologyKernel}
-                      disabled={!morphologyEnabled}
-                      onChange={(e) =>
-                        setMorphologyKernel(
-                          Number(e.target.value) as 3 | 5 | 7
-                        )
-                      }
-                    >
-                      <option value={3}>3×3</option>
-                      <option value={5}>5×5</option>
-                      <option value={7}>7×7</option>
-                    </select>
-                  </div>
+                    <input
+                      type="checkbox"
+                      checked={erosionEnabled}
+                      onChange={(e) => setErosionEnabled(e.target.checked)}
+                    />
+                    <Text variant="sm">{t('advanced.postProcessing.erosion')}</Text>
+                  </label>
+                  <SliderRow
+                    label={t('advanced.params.erosionPixels')}
+                    displayValue={`${erosionPixels} px`}
+                    value={erosionPixels}
+                    min={0}
+                    max={6}
+                    step={1}
+                    disabled={!erosionEnabled}
+                    onChange={setErosionPixels}
+                  />
                   <label
                     className={css({
                       display: 'flex',
@@ -1145,6 +1277,34 @@ export const EffectsConfiguration = ({
                     />
                     <Text variant="sm">{t('advanced.postProcessing.guidedFilter')}</Text>
                   </label>
+                  {guidedFilterEnabled && (
+                    <Text
+                      variant="xsNote"
+                      className={css({ paddingLeft: '1.4rem' })}
+                    >
+                      {t('advanced.params.guidedFilterCpuWarning')}
+                    </Text>
+                  )}
+                  <SliderRow
+                    label={t('advanced.params.guidedRadius')}
+                    displayValue={String(guidedRadius)}
+                    value={guidedRadius}
+                    min={1}
+                    max={15}
+                    step={1}
+                    disabled={!guidedFilterEnabled}
+                    onChange={setGuidedRadius}
+                  />
+                  <SliderRow
+                    label={t('advanced.params.guidedEps')}
+                    displayValue={Math.pow(10, guidedEpsLog).toExponential(1)}
+                    value={guidedEpsLog}
+                    min={-4}
+                    max={-1.3}
+                    step={0.1}
+                    disabled={!guidedFilterEnabled}
+                    onChange={setGuidedEpsLog}
+                  />
                   <label
                     className={css({
                       display: 'flex',
@@ -1160,6 +1320,16 @@ export const EffectsConfiguration = ({
                     />
                     <Text variant="sm">{t('advanced.postProcessing.ema')}</Text>
                   </label>
+                  <SliderRow
+                    label={t('advanced.params.emaAlpha')}
+                    displayValue={emaAlpha.toFixed(2)}
+                    value={emaAlpha}
+                    min={0.05}
+                    max={1.0}
+                    step={0.05}
+                    disabled={!emaEnabled}
+                    onChange={setEmaAlpha}
+                  />
                 </div>
                 {processorConfig &&
                   (processorConfig.type === ProcessorType.BLUR ||

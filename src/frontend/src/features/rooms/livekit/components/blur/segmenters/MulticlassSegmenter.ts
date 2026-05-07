@@ -1,9 +1,13 @@
 import {
-  FilesetResolver,
   ImageSegmenter,
   ImageSegmenterResult,
 } from '@mediapipe/tasks-vision'
-import { Segmenter, detectMediapipeDelegate } from './Segmenter'
+import {
+  Segmenter,
+  getMediapipeFileset,
+  probeMediapipeDelegate,
+} from './Segmenter'
+import { pushMattingError } from '../errors/MattingErrorStore'
 
 const MODEL_URL =
   'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite'
@@ -18,25 +22,35 @@ export class MulticlassSegmenter implements Segmenter {
   private imageSegmenter?: ImageSegmenter
 
   async init() {
-    const vision = await FilesetResolver.forVisionTasks(
-      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm'
-    )
-    this.imageSegmenter = await ImageSegmenter.createFromOptions(vision, {
-      baseOptions: {
-        modelAssetPath: MODEL_URL,
-        delegate: detectMediapipeDelegate(),
-      },
-      runningMode: 'VIDEO',
-      outputCategoryMask: false,
-      outputConfidenceMasks: true,
-    })
+    try {
+      const [fileset, delegate] = await Promise.all([
+        getMediapipeFileset(),
+        probeMediapipeDelegate(),
+      ])
+      this.imageSegmenter = await ImageSegmenter.createFromOptions(fileset, {
+        baseOptions: {
+          modelAssetPath: MODEL_URL,
+          delegate,
+        },
+        runningMode: 'VIDEO',
+        outputCategoryMask: false,
+        outputConfidenceMasks: true,
+      })
+    } catch (e) {
+      pushMattingError({
+        code: 'MEDIAPIPE_INIT_FAILED',
+        level: 'error',
+        detail: `Multiclass model: ${e instanceof Error ? e.message : String(e)}`,
+      })
+      throw e
+    }
   }
 
   async segment(
     imageData: ImageData,
     timestampMs: number
   ): Promise<Float32Array> {
-    return new Promise<Float32Array>((resolve) => {
+    const segPromise = new Promise<Float32Array>((resolve) => {
       this.imageSegmenter!.segmentForVideo(
         imageData,
         timestampMs,
@@ -53,6 +67,10 @@ export class MulticlassSegmenter implements Segmenter {
         }
       )
     })
+    const timeout = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('segment() timeout after 2s')), 2000)
+    )
+    return Promise.race([segPromise, timeout])
   }
 
   destroy() {

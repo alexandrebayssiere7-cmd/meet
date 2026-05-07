@@ -264,15 +264,19 @@
       "postProcessing": {
         "title": "Post-processing",
         "sigmoid": "Sigmoid",
-        "morphology": "Morphology",
+        "erosion": "Edge erosion",
         "guidedFilter": "Guided Filter",
         "ema": "EMA"
       },
-      "morphology": {
-        "erosion": "Erosion",
-        "dilation": "Dilation",
-        "opening": "Opening",
-        "closing": "Closing"
+      "params": {
+        "sigmoidSteepness": "Sigmoid steepness",
+        "sigmoidThreshold": "Sigmoid threshold",
+        "erosionPixels": "Pixels removed (edges)",
+        "guidedRadius": "Radius (Guided Filter)",
+        "guidedEps": "Regularization (Guided Filter)",
+        "emaAlpha": "Responsiveness (EMA)",
+        "blurRadius": "Blur intensity",
+        "guidedFilterCpuWarning": "Guided Filter runs on CPU (may slow down)"
       },
       "apply": "Apply"
     },
@@ -327,6 +331,15 @@
           "6": "Gray library",
           "7": "Coffee counter"
         }
+      }
+    },
+    "matting": {
+      "errors": {
+        "MEDIAPIPE_INIT_FAILED": "The segmentation model could not be loaded. Please check your internet connection.",
+        "WEBGL2_INIT_FAILED": "WebGL2 is not available in this browser. The video effect cannot be applied.",
+        "CAPTURESTREAM_UNSUPPORTED": "This browser does not support the video capture required for processing.",
+        "VIRTUAL_BG_LOAD_FAILED": "The background image could not be loaded.",
+        "POSTPROCESS_SHADER_COMPILE_FAILED": "A GPU error is preventing the effect from working."
       }
     },
     "faceLandmarks": {

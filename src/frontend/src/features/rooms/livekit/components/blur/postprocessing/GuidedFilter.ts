@@ -33,7 +33,9 @@ function boxFilter(
   for (let y = 0; y < height; y++) {
     const off = y * width
     let sum = 0
-    for (let x = 0; x <= radius && x < width; x++) sum += src[off + x]
+    // Init: prime the window with pixels [0, radius-1]. The loop body then adds src[radius]
+    // at x=0 (x1 = 0+radius), giving the correct box [0..radius] without double-counting.
+    for (let x = 0; x < radius && x < width; x++) sum += src[off + x]
     for (let x = 0; x < width; x++) {
       const x0 = x - radius - 1
       const x1 = x + radius
@@ -48,7 +50,7 @@ function boxFilter(
   // vertical pass with running sum
   for (let x = 0; x < width; x++) {
     let sum = 0
-    for (let y = 0; y <= radius && y < height; y++) sum += tmp[y * width + x]
+    for (let y = 0; y < radius && y < height; y++) sum += tmp[y * width + x]
     for (let y = 0; y < height; y++) {
       const y0 = y - radius - 1
       const y1 = y + radius

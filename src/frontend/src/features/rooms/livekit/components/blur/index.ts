@@ -13,11 +13,10 @@ export enum SegmentationModel {
   MULTICLASS = 'multiclass',
 }
 
-export type MorphologyOp = 'erosion' | 'dilation' | 'opening' | 'closing'
-
 export type PostProcessingConfig = {
   sigmoid?: { steepness: number; threshold: number }
-  morphology?: { op: MorphologyOp; kernelSize: 3 | 5 | 7 }
+  /** Remove pixels from mask edges. pixels = 0 → no-op. */
+  erosion?: { pixels: number }
   guidedFilter?: { radius: number; eps: number }
   ema?: { alpha: number }
 }
@@ -40,6 +39,7 @@ export type ProcessorConfig =
 
 export interface BackgroundProcessorInterface extends TrackProcessor<Track.Kind> {
   update(opts: ProcessorConfig): Promise<void>
+  waitForReady?(): Promise<void>
   options: ProcessorConfig
 }
 
