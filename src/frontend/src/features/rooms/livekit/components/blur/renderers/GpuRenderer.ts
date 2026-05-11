@@ -1,4 +1,4 @@
-import { PostProcessingConfig } from '..'
+import { PostProcessingConfig, UpsamplingConfig } from '..'
 
 export interface GpuRendererInitOpts {
   processingW: number
@@ -6,6 +6,7 @@ export interface GpuRendererInitOpts {
   outW: number
   outH: number
   postProcessing: PostProcessingConfig
+  upsampling: UpsamplingConfig
 }
 
 /**
@@ -24,6 +25,7 @@ export interface GpuRenderer {
   setBlurRadius(px: number): void
   setMode(mode: 'blur' | 'virtual'): void
   setPostProcessing(cfg: PostProcessingConfig): void
+  setUpsampling(cfg: UpsamplingConfig): void
   render(videoElement: HTMLVideoElement): void
   /** Read a small RGBA8 patch — used by preflight diagnostics. */
   readPixels(x: number, y: number, w: number, h: number): Uint8Array

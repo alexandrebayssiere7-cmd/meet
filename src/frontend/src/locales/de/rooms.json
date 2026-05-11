@@ -269,18 +269,20 @@
         "title": "Nachbearbeitung",
         "sigmoid": "Sigmoid",
         "erosion": "Kantenerosion",
-        "guidedFilter": "Guided Filter",
         "ema": "EMA"
+      },
+      "upsampling": {
+        "title": "Hochskalierung",
+        "guidedFilter": "Guided Filter (GPU)"
       },
       "params": {
         "sigmoidSteepness": "Sigmoid-Steilheit",
         "sigmoidThreshold": "Sigmoid-Schwelle",
         "erosionPixels": "Entfernte Pixel (Kanten)",
-        "guidedRadius": "Radius (Guided Filter)",
-        "guidedEps": "Regularisierung (Guided Filter)",
         "emaAlpha": "Reaktivität (EMA)",
         "blurRadius": "Unschärfe-Intensität",
-        "guidedFilterCpuWarning": "Guided Filter läuft auf der CPU (kann verlangsamen)"
+        "upsamplingRadius": "Radius (Guided Filter)",
+        "upsamplingEps": "Regularisierung (Guided Filter)"
       },
       "apply": "Anwenden"
     },

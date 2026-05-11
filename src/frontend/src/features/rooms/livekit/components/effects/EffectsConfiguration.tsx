@@ -6,6 +6,7 @@ import {
   BackgroundProcessorInterface,
   PostProcessingConfig,
   PreProcessingConfig,
+  UpsamplingConfig,
   ProcessorConfig,
   ProcessorType,
   SegmentationModel,
@@ -188,6 +189,12 @@ export const EffectsConfiguration = ({
         processorConfig.type === ProcessorType.VIRTUAL) &&
       processorConfig.postProcessing) ||
     {}
+  const initialUP: UpsamplingConfig =
+    (processorConfig &&
+      (processorConfig.type === ProcessorType.BLUR ||
+        processorConfig.type === ProcessorType.VIRTUAL) &&
+      processorConfig.upsampling) ||
+    {}
   const initialPRE: PreProcessingConfig =
     (processorConfig &&
       (processorConfig.type === ProcessorType.BLUR ||
@@ -209,15 +216,14 @@ export const EffectsConfiguration = ({
   const [erosionPixels, setErosionPixels] = useState<number>(
     initialPP.erosion?.pixels ?? 2
   )
-  const [guidedFilterEnabled, setGuidedFilterEnabled] = useState(
-    !!initialPP.guidedFilter
+  const [upsamplingGuided, setUpsamplingGuided] = useState(
+    initialUP.method === 'guided'
   )
-  const [guidedRadius, setGuidedRadius] = useState<number>(
-    initialPP.guidedFilter?.radius ?? 4
+  const [upsamplingRadius, setUpsamplingRadius] = useState<number>(
+    initialUP.radius ?? 8
   )
-  // Eps spans 4 decades — slider exposes log10(eps) in [-4, -1.3].
-  const [guidedEpsLog, setGuidedEpsLog] = useState<number>(
-    Math.log10(initialPP.guidedFilter?.eps ?? 0.01)
+  const [upsamplingEpsLog, setUpsamplingEpsLog] = useState<number>(
+    Math.log10(initialUP.eps ?? 0.01)
   )
   const [emaEnabled, setEmaEnabled] = useState(!!initialPP.ema)
   const [emaAlpha, setEmaAlpha] = useState<number>(
@@ -244,11 +250,6 @@ export const EffectsConfiguration = ({
       cfg.sigmoid = { steepness: sigmoidSteepness, threshold: sigmoidThreshold }
     if (erosionEnabled && erosionPixels > 0)
       cfg.erosion = { pixels: erosionPixels }
-    if (guidedFilterEnabled)
-      cfg.guidedFilter = {
-        radius: guidedRadius,
-        eps: Math.pow(10, guidedEpsLog),
-      }
     if (emaEnabled) cfg.ema = { alpha: emaAlpha }
     return cfg
   }, [
@@ -257,12 +258,18 @@ export const EffectsConfiguration = ({
     sigmoidThreshold,
     erosionEnabled,
     erosionPixels,
-    guidedFilterEnabled,
-    guidedRadius,
-    guidedEpsLog,
     emaEnabled,
     emaAlpha,
   ])
+
+  const buildUpsampling = useCallback((): UpsamplingConfig => {
+    if (!upsamplingGuided) return { method: 'bilinear' }
+    return {
+      method: 'guided',
+      radius: upsamplingRadius,
+      eps: Math.pow(10, upsamplingEpsLog),
+    }
+  }, [upsamplingGuided, upsamplingRadius, upsamplingEpsLog])
 
   const withAdvanced = useCallback(
     (config: ProcessorConfig): ProcessorConfig => {
@@ -275,11 +282,12 @@ export const EffectsConfiguration = ({
           model,
           preProcessing: buildPreProcessing(),
           postProcessing: buildPostProcessing(),
+          upsampling: buildUpsampling(),
         }
       }
       return config
     },
-    [model, buildPreProcessing, buildPostProcessing]
+    [model, buildPreProcessing, buildPostProcessing, buildUpsampling]
   )
 
   const selectedId = useMemo(
@@ -1325,49 +1333,6 @@ export const EffectsConfiguration = ({
                   >
                     <input
                       type="checkbox"
-                      checked={guidedFilterEnabled}
-                      onChange={(e) => setGuidedFilterEnabled(e.target.checked)}
-                    />
-                    <Text variant="sm">{t('advanced.postProcessing.guidedFilter')}</Text>
-                  </label>
-                  {guidedFilterEnabled && (
-                    <Text
-                      variant="xsNote"
-                      className={css({ paddingLeft: '1.4rem' })}
-                    >
-                      {t('advanced.params.guidedFilterCpuWarning')}
-                    </Text>
-                  )}
-                  <SliderRow
-                    label={t('advanced.params.guidedRadius')}
-                    displayValue={String(guidedRadius)}
-                    value={guidedRadius}
-                    min={1}
-                    max={15}
-                    step={1}
-                    disabled={!guidedFilterEnabled}
-                    onChange={setGuidedRadius}
-                  />
-                  <SliderRow
-                    label={t('advanced.params.guidedEps')}
-                    displayValue={Math.pow(10, guidedEpsLog).toExponential(1)}
-                    value={guidedEpsLog}
-                    min={-4}
-                    max={-1.3}
-                    step={0.1}
-                    disabled={!guidedFilterEnabled}
-                    onChange={setGuidedEpsLog}
-                  />
-                  <label
-                    className={css({
-                      display: 'flex',
-                      gap: '0.4rem',
-                      alignItems: 'center',
-                      cursor: 'pointer',
-                    })}
-                  >
-                    <input
-                      type="checkbox"
                       checked={emaEnabled}
                       onChange={(e) => setEmaEnabled(e.target.checked)}
                     />
@@ -1382,6 +1347,56 @@ export const EffectsConfiguration = ({
                     step={0.05}
                     disabled={!emaEnabled}
                     onChange={setEmaAlpha}
+                  />
+                </div>
+                <H
+                  lvl={3}
+                  style={{ marginBottom: '0.4rem', marginTop: '0.75rem' }}
+                  variant="bodyXsMedium"
+                >
+                  {t('advanced.upsampling.title')}
+                </H>
+                <div
+                  className={css({
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '0.35rem',
+                  })}
+                >
+                  <label
+                    className={css({
+                      display: 'flex',
+                      gap: '0.4rem',
+                      alignItems: 'center',
+                      cursor: 'pointer',
+                    })}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={upsamplingGuided}
+                      onChange={(e) => setUpsamplingGuided(e.target.checked)}
+                    />
+                    <Text variant="sm">{t('advanced.upsampling.guidedFilter')}</Text>
+                  </label>
+                  <SliderRow
+                    label={t('advanced.params.upsamplingRadius')}
+                    displayValue={String(upsamplingRadius)}
+                    value={upsamplingRadius}
+                    min={2}
+                    max={32}
+                    step={1}
+                    disabled={!upsamplingGuided}
+                    onChange={setUpsamplingRadius}
+                  />
+                  <SliderRow
+                    label={t('advanced.params.upsamplingEps')}
+                    displayValue={Math.pow(10, upsamplingEpsLog).toExponential(1)}
+                    value={upsamplingEpsLog}
+                    min={-4}
+                    max={-1.3}
+                    step={0.1}
+                    disabled={!upsamplingGuided}
+                    onChange={setUpsamplingEpsLog}
                   />
                 </div>
                 {processorConfig &&

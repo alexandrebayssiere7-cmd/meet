@@ -269,18 +269,20 @@
         "title": "Nabewerking",
         "sigmoid": "Sigmoid",
         "erosion": "Randerosie",
-        "guidedFilter": "Guided Filter",
         "ema": "EMA"
+      },
+      "upsampling": {
+        "title": "Opschaling",
+        "guidedFilter": "Guided Filter (GPU)"
       },
       "params": {
         "sigmoidSteepness": "Sigmoid steilheid",
         "sigmoidThreshold": "Sigmoid drempel",
         "erosionPixels": "Verwijderde pixels (randen)",
-        "guidedRadius": "Straal (Guided Filter)",
-        "guidedEps": "Regularisatie (Guided Filter)",
         "emaAlpha": "Reactiviteit (EMA)",
         "blurRadius": "Vervaging-intensiteit",
-        "guidedFilterCpuWarning": "Guided Filter draait op de CPU (kan vertragen)"
+        "upsamplingRadius": "Straal (Guided Filter)",
+        "upsamplingEps": "Regularisatie (Guided Filter)"
       },
       "apply": "Toepassen"
     },

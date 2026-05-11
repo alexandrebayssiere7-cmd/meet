@@ -1,6 +1,7 @@
-import { PostProcessingConfig } from '..'
+import { PostProcessingConfig, UpsamplingConfig } from '..'
 import { pushMattingError } from '../errors/MattingErrorStore'
 import { GpuRenderer, GpuRendererInitOpts } from './GpuRenderer'
+import { GpuGuidedFilter } from './GpuGuidedFilter'
 
 /**
  * WebGL2 implementation of the matting compositor.
@@ -26,6 +27,8 @@ export class WebGl2Renderer implements GpuRenderer {
   private procW = 0
   private procH = 0
   private postCfg: PostProcessingConfig = {}
+  private upsamplingCfg: UpsamplingConfig = {}
+  private gf: GpuGuidedFilter | null = null
   private mode: 'blur' | 'virtual' = 'blur'
   private blurRadius = 10
 
@@ -91,6 +94,7 @@ export class WebGl2Renderer implements GpuRenderer {
     this.procW = opts.processingW
     this.procH = opts.processingH
     this.postCfg = opts.postProcessing
+    this.upsamplingCfg = opts.upsampling
     this.quarterW = Math.max(2, Math.floor(this.outW / 4))
     this.quarterH = Math.max(2, Math.floor(this.outH / 4))
 
@@ -194,6 +198,14 @@ export class WebGl2Renderer implements GpuRenderer {
     this.hasEmaState = false
   }
 
+  setUpsampling(cfg: UpsamplingConfig) {
+    this.upsamplingCfg = cfg
+    if (cfg.method !== 'guided') {
+      this.gf?.destroy()
+      this.gf = null
+    }
+  }
+
   render(videoElement: HTMLVideoElement) {
     if (!videoElement || videoElement.videoWidth === 0) return
     const gl = this.gl
@@ -216,13 +228,16 @@ export class WebGl2Renderer implements GpuRenderer {
       return
     }
 
-    // 2. Run post-processing chain on the mask. Output goes into either maskA or maskB.
-    const curMaskTex = this._runPostProcessing()
+    // 2. Run post-processing chain on the mask at processing resolution.
+    const procMaskTex = this._runPostProcessing()
 
-    // 3. Build background (blurred camera or virtual image).
+    // 3. Upsample mask to full output resolution (bilinear or guided filter).
+    const finalMaskTex = this._upsampleMask(procMaskTex)
+
+    // 4. Build background (blurred camera or virtual image).
     const bgTex = this._buildBackground()
 
-    // 4. Composite to the canvas.
+    // 5. Composite to the canvas.
     gl.bindFramebuffer(gl.FRAMEBUFFER, null)
     gl.viewport(0, 0, this.outW, this.outH)
     gl.useProgram(this.pComposite)
@@ -233,7 +248,7 @@ export class WebGl2Renderer implements GpuRenderer {
     gl.bindTexture(gl.TEXTURE_2D, bgTex)
     gl.uniform1i(gl.getUniformLocation(this.pComposite, 'uBg'), 1)
     gl.activeTexture(gl.TEXTURE2)
-    gl.bindTexture(gl.TEXTURE_2D, curMaskTex)
+    gl.bindTexture(gl.TEXTURE_2D, finalMaskTex)
     gl.uniform1i(gl.getUniformLocation(this.pComposite, 'uMask'), 2)
     gl.uniform1f(gl.getUniformLocation(this.pComposite, 'uFeather'), 0.08)
     gl.uniform1f(
@@ -258,8 +273,32 @@ export class WebGl2Renderer implements GpuRenderer {
     return out
   }
 
+  private _upsampleMask(procMaskTex: WebGLTexture): WebGLTexture {
+    if (this.upsamplingCfg.method !== 'guided') {
+      return procMaskTex
+    }
+    if (!this.gf) {
+      try {
+        this.gf = new GpuGuidedFilter(this.gl, this.outW, this.outH)
+      } catch (e) {
+        pushMattingError({
+          code: 'POSTPROCESS_SHADER_COMPILE_FAILED',
+          level: 'warn',
+          detail: e instanceof Error ? e.message : String(e),
+        })
+        this.upsamplingCfg = {}
+        return procMaskTex
+      }
+    }
+    const radius = this.upsamplingCfg.radius ?? 8
+    const eps    = this.upsamplingCfg.eps    ?? 0.01
+    return this.gf.run(this.videoTex, procMaskTex, radius, eps, this.vao)
+  }
+
   destroy() {
     if (!this.gl) return
+    this.gf?.destroy()
+    this.gf = null
     const gl = this.gl
     const tex = [
       this.videoTex,

@@ -13,13 +13,16 @@ export enum SegmentationModel {
   MULTICLASS = 'multiclass',
 }
 
-export type MorphologyOp = 'erosion' | 'dilation' | 'opening' | 'closing'
-
 export type PostProcessingConfig = {
   sigmoid?: { steepness: number; threshold: number }
-  morphology?: { op: MorphologyOp; kernelSize: 3 | 5 | 7 }
-  guidedFilter?: { radius: number; eps: number }
+  erosion?: { pixels: number }
   ema?: { alpha: number }
+}
+
+export type UpsamplingConfig = {
+  method?: 'bilinear' | 'guided'
+  radius?: number
+  eps?: number
 }
 
 export type PreProcessingConfig = {
@@ -33,6 +36,7 @@ export type ProcessorConfig =
       model?: SegmentationModel
       preProcessing?: PreProcessingConfig
       postProcessing?: PostProcessingConfig
+      upsampling?: UpsamplingConfig
     }
   | {
       type: ProcessorType.VIRTUAL
@@ -41,6 +45,7 @@ export type ProcessorConfig =
       model?: SegmentationModel
       preProcessing?: PreProcessingConfig
       postProcessing?: PostProcessingConfig
+      upsampling?: UpsamplingConfig
     }
   | ({ type: ProcessorType.FACE_LANDMARKS } & FaceLandmarksOptions)
 
