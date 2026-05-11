@@ -254,6 +254,36 @@
     "notAvailable": "Videoeffekte werden bald in deinem Browser verfügbar sein. Wir arbeiten daran! In der Zwischenzeit kannst du Google Chrome für die beste Leistung oder Firefox verwenden :(",
     "heading": "Unschärfe",
     "clear": "Effekt deaktivieren",
+    "advanced": {
+      "title": "Erweiterte Einstellungen",
+      "model": {
+        "title": "Segmentierungsmodell",
+        "landscape": "Landscape (schnell)",
+        "multiclass": "Multiclass (Qualität)"
+      },
+      "preProcessing": {
+        "title": "Vorverarbeitung",
+        "roiCropping": "Personenausschnitt (ROI)"
+      },
+      "postProcessing": {
+        "title": "Nachbearbeitung",
+        "sigmoid": "Sigmoid",
+        "erosion": "Kantenerosion",
+        "guidedFilter": "Guided Filter",
+        "ema": "EMA"
+      },
+      "params": {
+        "sigmoidSteepness": "Sigmoid-Steilheit",
+        "sigmoidThreshold": "Sigmoid-Schwelle",
+        "erosionPixels": "Entfernte Pixel (Kanten)",
+        "guidedRadius": "Radius (Guided Filter)",
+        "guidedEps": "Regularisierung (Guided Filter)",
+        "emaAlpha": "Reaktivität (EMA)",
+        "blurRadius": "Unschärfe-Intensität",
+        "guidedFilterCpuWarning": "Guided Filter läuft auf der CPU (kann verlangsamen)"
+      },
+      "apply": "Anwenden"
+    },
     "blur": {
       "title": "Hintergrundunschärfe",
       "status": {
@@ -308,6 +338,15 @@
       }
     },
 
+    "matting": {
+      "errors": {
+        "MEDIAPIPE_INIT_FAILED": "Das Segmentierungsmodell konnte nicht geladen werden. Bitte überprüfen Sie Ihre Internetverbindung.",
+        "WEBGL2_INIT_FAILED": "WebGL2 ist in diesem Browser nicht verfügbar. Der Videoeffekt kann nicht angewendet werden.",
+        "CAPTURESTREAM_UNSUPPORTED": "Dieser Browser unterstützt die für die Verarbeitung erforderliche Videoaufnahme nicht.",
+        "VIRTUAL_BG_LOAD_FAILED": "Das Hintergrundbild konnte nicht geladen werden.",
+        "POSTPROCESS_SHADER_COMPILE_FAILED": "Ein GPU-Fehler verhindert die Funktion des Effekts."
+      }
+    },
     "faceLandmarks": {
       "title": "Visuelle Effekte",
       "glasses": {

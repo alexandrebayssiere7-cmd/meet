@@ -2,6 +2,7 @@ import { proxy, subscribe } from 'valtio'
 import {
   ProcessorConfig,
   ProcessorType,
+  SegmentationModel,
 } from '@/features/rooms/livekit/components/blur'
 import {
   loadUserChoices,
@@ -34,6 +35,17 @@ export const userChoicesStore = proxy<LocalUserChoices>(getUserChoicesState())
 subscribe(userChoicesStore, () => {
   saveUserChoices(userChoicesStore, false)
 })
+
+// Drop unknown SegmentationModel values that may exist in older localStorage
+const cfg = userChoicesStore.processorConfig
+if (
+  cfg &&
+  (cfg.type === ProcessorType.BLUR || cfg.type === ProcessorType.VIRTUAL) &&
+  cfg.model !== undefined &&
+  !Object.values(SegmentationModel).includes(cfg.model)
+) {
+  cfg.model = undefined
+}
 
 // we run some logic on store loading to check if the processor config is still valid
 if (userChoicesStore.processorConfig?.type === ProcessorType.VIRTUAL) {

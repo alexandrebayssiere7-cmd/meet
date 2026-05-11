@@ -83,3 +83,10 @@ docker/livekit/out
 
 # LiveKit CA configuration
 docker/livekit/rootCA.pem
+
+# Graphify
+graphify-out/
+*.graphify
+
+# Claude
+CLAUDE.md

@@ -254,6 +254,36 @@
     "notAvailable": "Les effets vidéo seront bientôt disponibles sur votre navigateur. Nous y travaillons ! En attendant, vous pouvez utiliser Google Chrome pour de meilleures performances ou Firefox :(",
     "heading": "Flou",
     "clear": "Désactiver l'effet",
+    "advanced": {
+      "title": "Paramètres avancés",
+      "model": {
+        "title": "Modèle de segmentation",
+        "landscape": "Landscape (rapide)",
+        "multiclass": "Multiclass (qualité)"
+      },
+      "preProcessing": {
+        "title": "Pré-traitement",
+        "roiCropping": "Recadrage sur la personne (ROI)"
+      },
+      "postProcessing": {
+        "title": "Post-traitement",
+        "sigmoid": "Sigmoid",
+        "erosion": "Érosion des bords",
+        "guidedFilter": "Guided Filter",
+        "ema": "EMA"
+      },
+      "params": {
+        "sigmoidSteepness": "Pente sigmoid",
+        "sigmoidThreshold": "Seuil sigmoid",
+        "erosionPixels": "Pixels supprimés (bords)",
+        "guidedRadius": "Rayon (Guided Filter)",
+        "guidedEps": "Régularisation (Guided Filter)",
+        "emaAlpha": "Réactivité (EMA)",
+        "blurRadius": "Intensité du flou",
+        "guidedFilterCpuWarning": "Guided Filter s'exécute sur CPU (peut ralentir)"
+      },
+      "apply": "Appliquer"
+    },
     "blur": {
       "title": "Flou d'arrière-plan",
       "status": {
@@ -305,6 +335,15 @@
           "6": "Bibliothèque grise",
           "7": "Comptoir de café"
         }
+      }
+    },
+    "matting": {
+      "errors": {
+        "MEDIAPIPE_INIT_FAILED": "Le modèle de segmentation n'a pas pu être chargé. Vérifiez votre connexion internet.",
+        "WEBGL2_INIT_FAILED": "WebGL2 n'est pas disponible sur ce navigateur. L'effet vidéo ne peut pas être appliqué.",
+        "CAPTURESTREAM_UNSUPPORTED": "Ce navigateur ne supporte pas la capture vidéo nécessaire au traitement.",
+        "VIRTUAL_BG_LOAD_FAILED": "L'image de fond n'a pas pu être chargée.",
+        "POSTPROCESS_SHADER_COMPILE_FAILED": "Une erreur GPU empêche l'effet de fonctionner."
       }
     },
     "faceLandmarks": {
