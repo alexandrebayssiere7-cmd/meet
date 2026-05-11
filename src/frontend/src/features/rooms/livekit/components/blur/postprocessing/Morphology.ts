@@ -87,5 +87,7 @@ export function applyMorphology(
       const dilated = applyMinOrMax(mask, width, height, radius, maxReducer)
       return applyMinOrMax(dilated, width, height, radius, minReducer)
     }
+    default:
+      return mask
   }
 }

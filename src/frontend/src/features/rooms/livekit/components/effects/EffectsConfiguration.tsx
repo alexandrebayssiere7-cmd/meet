@@ -824,7 +824,7 @@ export const EffectsConfiguration = ({
           <div>
             {mattingErrors.filter(e => e.level === 'error').map(e => (
               <Information key={e.code} style={{ marginBottom: '1rem' }}>
-                <Text variant="bodyXs">
+                <Text variant="bodyXsMedium">
                   {t(`matting.errors.${e.code}`, { defaultValue: e.detail ?? e.code })}
                 </Text>
               </Information>

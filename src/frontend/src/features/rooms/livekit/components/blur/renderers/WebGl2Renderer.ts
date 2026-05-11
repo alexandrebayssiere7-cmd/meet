@@ -21,7 +21,6 @@ export class WebGl2Renderer implements GpuRenderer {
   readonly backend = 'webgl2'
 
   private gl!: WebGL2RenderingContext
-  private canvas!: HTMLCanvasElement
   private outW = 0
   private outH = 0
   private procW = 0
@@ -70,7 +69,6 @@ export class WebGl2Renderer implements GpuRenderer {
   private virtualImgUploaded = false
 
   async init(canvas: HTMLCanvasElement, opts: GpuRendererInitOpts) {
-    this.canvas = canvas
     const gl = canvas.getContext('webgl2', {
       alpha: false,
       antialias: false,

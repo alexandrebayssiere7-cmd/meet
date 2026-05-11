@@ -13,10 +13,11 @@ export enum SegmentationModel {
   MULTICLASS = 'multiclass',
 }
 
+export type MorphologyOp = 'erosion' | 'dilation' | 'opening' | 'closing'
+
 export type PostProcessingConfig = {
   sigmoid?: { steepness: number; threshold: number }
-  /** Remove pixels from mask edges. pixels = 0 → no-op. */
-  erosion?: { pixels: number }
+  morphology?: { op: MorphologyOp; kernelSize: 3 | 5 | 7 }
   guidedFilter?: { radius: number; eps: number }
   ema?: { alpha: number }
 }
