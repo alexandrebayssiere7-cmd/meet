@@ -32,10 +32,22 @@ export class UnifiedBackgroundTrackProcessor implements BackgroundProcessorInter
   }
 
   async init(opts: ProcessorOptions<Track.Kind>) {
+    const settings = opts.track.getSettings()
+    console.log(
+      `[UnifiedProcessor] 📱 Camera Dimensions: ${settings.width}x${settings.height} (Aspect: ${
+        (settings.width || 0) / (settings.height || 1)
+      })`
+    )
+
+    if ((settings.width || 0) < (settings.height || 0)) {
+      console.log('[UnifiedProcessor] 🔄 PORTRAIT mode detected')
+    }
+
     return this.processor.init(opts)
   }
 
   async restart(opts: ProcessorOptions<Track.Kind>) {
+    console.log('[UnifiedProcessor] 🔄 Restarting processor...')
     return this.processor.restart(opts)
   }
 
