@@ -35,8 +35,6 @@ export class WebGl2Renderer implements GpuRenderer {
   // programs
   private pUploadMask!: WebGLProgram
   private pSigmoid!: WebGLProgram
-  private pErosionH!: WebGLProgram
-  private pErosionV!: WebGLProgram
   private pEma!: WebGLProgram
   private pCopyR!: WebGLProgram
   private pBlurH!: WebGLProgram
@@ -238,6 +236,15 @@ export class WebGl2Renderer implements GpuRenderer {
     gl.bindTexture(gl.TEXTURE_2D, curMaskTex)
     gl.uniform1i(gl.getUniformLocation(this.pComposite, 'uMask'), 2)
     gl.uniform1f(gl.getUniformLocation(this.pComposite, 'uFeather'), 0.08)
+    gl.uniform1f(
+      gl.getUniformLocation(this.pComposite, 'uErosionRadius'),
+      this.postCfg.erosion?.pixels ?? 0
+    )
+    gl.uniform2f(
+      gl.getUniformLocation(this.pComposite, 'uOutTexel'),
+      1 / this.outW,
+      1 / this.outH
+    )
     this._drawQuad()
 
     gl.flush()
@@ -280,8 +287,6 @@ export class WebGl2Renderer implements GpuRenderer {
     const programs = [
       this.pUploadMask,
       this.pSigmoid,
-      this.pErosionH,
-      this.pErosionV,
       this.pEma,
       this.pCopyR,
       this.pBlurH,
@@ -328,39 +333,6 @@ export class WebGl2Renderer implements GpuRenderer {
       gl.uniform1f(
         gl.getUniformLocation(this.pSigmoid, 'uThreshold'),
         this.postCfg.sigmoid.threshold
-      )
-      this._drawQuad()
-      advance()
-    }
-
-    // Erosion — separable H+V min-filter, removes pixels from mask edges.
-    if (this.postCfg.erosion && this.postCfg.erosion.pixels > 0) {
-      const radius = this.postCfg.erosion.pixels
-      // H pass
-      gl.bindFramebuffer(gl.FRAMEBUFFER, dstFbo)
-      gl.useProgram(this.pErosionH)
-      gl.activeTexture(gl.TEXTURE0)
-      gl.bindTexture(gl.TEXTURE_2D, src)
-      gl.uniform1i(gl.getUniformLocation(this.pErosionH, 'uTex'), 0)
-      gl.uniform1f(gl.getUniformLocation(this.pErosionH, 'uRadius'), radius)
-      gl.uniform2f(
-        gl.getUniformLocation(this.pErosionH, 'uTexel'),
-        1 / this.procW,
-        1 / this.procH
-      )
-      this._drawQuad()
-      advance()
-      // V pass
-      gl.bindFramebuffer(gl.FRAMEBUFFER, dstFbo)
-      gl.useProgram(this.pErosionV)
-      gl.activeTexture(gl.TEXTURE0)
-      gl.bindTexture(gl.TEXTURE_2D, src)
-      gl.uniform1i(gl.getUniformLocation(this.pErosionV, 'uTex'), 0)
-      gl.uniform1f(gl.getUniformLocation(this.pErosionV, 'uRadius'), radius)
-      gl.uniform2f(
-        gl.getUniformLocation(this.pErosionV, 'uTexel'),
-        1 / this.procW,
-        1 / this.procH
       )
       this._drawQuad()
       advance()
@@ -681,42 +653,6 @@ void main() {
   fragColor = vec4(y, 0.0, 0.0, 1.0);
 }`
 
-    const FS_EROSION_H = `#version 300 es
-precision mediump float;
-in vec2 vUv;
-uniform sampler2D uTex;
-uniform float uRadius;
-uniform vec2 uTexel;
-out vec4 fragColor;
-void main() {
-  float v = texture(uTex, vUv).r;
-  for (int i = 1; i <= 6; i++) {
-    float fi = float(i);
-    if (fi > uRadius) break;
-    v = min(v, texture(uTex, vUv + vec2(uTexel.x * fi, 0.0)).r);
-    v = min(v, texture(uTex, vUv - vec2(uTexel.x * fi, 0.0)).r);
-  }
-  fragColor = vec4(v, 0.0, 0.0, 1.0);
-}`
-
-    const FS_EROSION_V = `#version 300 es
-precision mediump float;
-in vec2 vUv;
-uniform sampler2D uTex;
-uniform float uRadius;
-uniform vec2 uTexel;
-out vec4 fragColor;
-void main() {
-  float v = texture(uTex, vUv).r;
-  for (int i = 1; i <= 6; i++) {
-    float fi = float(i);
-    if (fi > uRadius) break;
-    v = min(v, texture(uTex, vUv + vec2(0.0, uTexel.y * fi)).r);
-    v = min(v, texture(uTex, vUv - vec2(0.0, uTexel.y * fi)).r);
-  }
-  fragColor = vec4(v, 0.0, 0.0, 1.0);
-}`
-
     const FS_EMA = `#version 300 es
 precision mediump float;
 in vec2 vUv;
@@ -776,21 +712,33 @@ uniform sampler2D uVideo;
 uniform sampler2D uBg;
 uniform sampler2D uMask;
 uniform float uFeather;
+uniform float uErosionRadius; // pixels at output resolution, 0 = disabled
+uniform vec2 uOutTexel;       // vec2(1/outW, 1/outH)
 out vec4 fragColor;
 void main() {
   vec3 fg = texture(uVideo, vUv).rgb;
   vec3 bg = texture(uBg, vUv).rgb;
-  // MediaPipe returns mask data in GPU/bottom-up order (row 0 = bottom of image),
-  // matching the video texture (UNPACK_FLIP_Y_WEBGL=true, also bottom-up). No flip needed.
+  // Erosion applied here at output resolution so that uErosionRadius is measured
+  // in actual output pixels — not in the coarse processing-resolution pixels that
+  // would produce large blocky artefacts after upsampling.
+  // Diamond kernel (H + V in one pass): accurate enough for edge trimming.
   float m = texture(uMask, vUv).r;
+  if (uErosionRadius > 0.0) {
+    for (int i = 1; i <= 16; i++) {
+      if (float(i) > uErosionRadius) break;
+      float fi = float(i);
+      m = min(m, texture(uMask, vUv + vec2(uOutTexel.x * fi, 0.0)).r);
+      m = min(m, texture(uMask, vUv - vec2(uOutTexel.x * fi, 0.0)).r);
+      m = min(m, texture(uMask, vUv + vec2(0.0, uOutTexel.y * fi)).r);
+      m = min(m, texture(uMask, vUv - vec2(0.0, uOutTexel.y * fi)).r);
+    }
+  }
   float t = smoothstep(0.5 - uFeather, 0.5 + uFeather, m);
   fragColor = vec4(mix(bg, fg, t), 1.0);
 }`
 
     this.pUploadMask = this._link(VS, FS_COPY_R)
     this.pSigmoid = this._link(VS, FS_SIGMOID)
-    this.pErosionH = this._link(VS, FS_EROSION_H)
-    this.pErosionV = this._link(VS, FS_EROSION_V)
     this.pEma = this._link(VS, FS_EMA)
     this.pCopyR = this._link(VS, FS_COPY_R)
     this.pBlurH = this._link(VS, FS_BLUR_H)
