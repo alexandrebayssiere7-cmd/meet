@@ -11,6 +11,7 @@ export enum ProcessorType {
 export enum SegmentationModel {
   LANDSCAPE = 'landscape',
   MULTICLASS = 'multiclass',
+  RVM = 'rvm',
 }
 
 export type PostProcessingConfig = {
@@ -36,6 +37,7 @@ export type ProcessorConfig =
       blurRadius: number
       model?: SegmentationModel
       preProcessing?: PreProcessingConfig
+      rvmDownsampleRatio?: number
       postProcessing?: PostProcessingConfig
       upsampling?: UpsamplingConfig
     }
@@ -45,6 +47,7 @@ export type ProcessorConfig =
       fileId?: string
       model?: SegmentationModel
       preProcessing?: PreProcessingConfig
+      rvmDownsampleRatio?: number
       postProcessing?: PostProcessingConfig
       upsampling?: UpsamplingConfig
     }

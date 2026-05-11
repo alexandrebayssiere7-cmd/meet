@@ -107,14 +107,14 @@ export const Dialog = ({
       isKeyboardDismissDisabled={isAlert}
       isDismissable={!isAlert}
       isOpen={isOpen}
-      onOpenChange={(isOpen) => {
-        if (onOpenChange) {
-          onOpenChange(isOpen)
-        }
-        if (!isOpen && onClose) {
-          onClose()
-        }
-      }}
+      onOpenChange={
+        onOpenChange || onClose
+          ? (open) => {
+              if (onOpenChange) onOpenChange(open)
+              if (!open && onClose) onClose()
+            }
+          : undefined
+      }
     >
       <StyledModal>
         <StyledRACDialog {...dialogProps}>

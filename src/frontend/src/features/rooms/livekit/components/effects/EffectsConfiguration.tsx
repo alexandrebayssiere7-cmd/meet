@@ -205,6 +205,16 @@ export const EffectsConfiguration = ({
     !!initialPRE.roiCropping?.enabled
   )
   const [model, setModel] = useState<SegmentationModel>(initialModel)
+  const initialRvmRatio: number | undefined =
+    processorConfig &&
+    (processorConfig.type === ProcessorType.BLUR ||
+      processorConfig.type === ProcessorType.VIRTUAL)
+      ? processorConfig.rvmDownsampleRatio
+      : undefined
+  const [rvmManual, setRvmManual] = useState<boolean>(
+    initialRvmRatio !== undefined
+  )
+  const [rvmRatio, setRvmRatio] = useState<number>(initialRvmRatio ?? 0.25)
   const [sigmoidEnabled, setSigmoidEnabled] = useState(!!initialPP.sigmoid)
   const [sigmoidSteepness, setSigmoidSteepness] = useState<number>(
     initialPP.sigmoid?.steepness ?? 10
@@ -288,13 +298,17 @@ export const EffectsConfiguration = ({
           ...config,
           model,
           preProcessing: buildPreProcessing(),
+          rvmDownsampleRatio:
+            model === SegmentationModel.RVM && rvmManual
+              ? rvmRatio
+              : undefined,
           postProcessing: buildPostProcessing(),
           upsampling: buildUpsampling(),
         }
       }
       return config
     },
-    [model, buildPreProcessing, buildPostProcessing, buildUpsampling]
+    [model, buildPreProcessing, rvmManual, rvmRatio, buildPostProcessing, buildUpsampling]
   )
 
   const selectedId = useMemo(
@@ -1222,7 +1236,62 @@ export const EffectsConfiguration = ({
                     />
                     <Text variant="sm">{t('advanced.model.multiclass')}</Text>
                   </label>
+                  <label
+                    className={css({
+                      display: 'flex',
+                      gap: '0.4rem',
+                      alignItems: 'center',
+                      cursor: 'pointer',
+                    })}
+                  >
+                    <input
+                      type="radio"
+                      name="matting-model"
+                      checked={model === SegmentationModel.RVM}
+                      onChange={() => setModel(SegmentationModel.RVM)}
+                    />
+                    <Text variant="sm">{t('advanced.model.rvm')}</Text>
+                  </label>
                 </div>
+
+                {model === SegmentationModel.RVM && (
+                  <div
+                    className={css({
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '0.35rem',
+                      marginBottom: '0.8rem',
+                    })}
+                  >
+                    <label
+                      className={css({
+                        display: 'flex',
+                        gap: '0.4rem',
+                        alignItems: 'center',
+                        cursor: 'pointer',
+                      })}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={rvmManual}
+                        onChange={(e) => setRvmManual(e.target.checked)}
+                      />
+                      <Text variant="sm">
+                        {t('advanced.rvmDownsample.manual')}
+                      </Text>
+                    </label>
+                    <SliderRow
+                      label={t('advanced.rvmDownsample.label')}
+                      displayValue={rvmRatio.toFixed(3)}
+                      value={rvmRatio}
+                      min={0.125}
+                      max={1.0}
+                      step={0.125}
+                      disabled={!rvmManual}
+                      onChange={setRvmRatio}
+                    />
+                  </div>
+                )}
 
                 <H
                   lvl={3}

@@ -10,13 +10,7 @@ import {
 } from '.'
 import { PreProcessingPipeline } from './preprocessing/PreProcessingPipeline'
 import { BBox } from './preprocessing/RoiCropper'
-import { Segmenter, createSegmenter } from './segmenters'
-import {
-  CLEAR_TIMEOUT,
-  SET_TIMEOUT,
-  TIMEOUT_TICK,
-  timerWorkerScript,
-} from './TimerWorker'
+import { Segmenter, createSegmenter, RVMSegmenter } from './segmenters'
 import { WebGl2Renderer } from './renderers/WebGl2Renderer'
 import { pushMattingError } from './errors/MattingErrorStore'
 
@@ -27,12 +21,14 @@ const DEFAULT_BLUR = 10
 /**
  * Unified background processor using WebGL2 for compositing.
  *
- * Pipeline per frame:
- *   videoElement
- *     → resize to segmenter input → ImageData (RGBA)
- *     → Segmenter.segment → Float32Array mask in [0, 1]
- *     → WebGl2Renderer.uploadMask + render → GPU post-processing + composite
+ * Two independent loops:
+ *   Segmenter loop  — free-running async, pulls frames, runs inference, writes
+ *                     to _latestMask as fast as the GPU allows.
+ *   Render loop     — requestVideoFrameCallback (fallback: rAF), fires at the
+ *                     camera's native framerate, composites the latest available
+ *                     mask without ever blocking on inference.
  *
+ * Decoupling prevents RVM's ~20-50ms inference from introducing render jitter.
  * All blur passes run in GLSL shaders — no ctx.filter (unreliable on Safari).
  */
 export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
@@ -47,7 +43,6 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
   videoElementLoaded?: boolean
 
   outputCanvas?: HTMLCanvasElement
-  // outputCanvasCtx removed — WebGl2Renderer owns the WebGL2 context
 
   segmentationMaskCanvas?: HTMLCanvasElement
   segmentationMaskCanvasCtx?: CanvasRenderingContext2D
@@ -57,7 +52,11 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
   private gpuRenderer?: WebGl2Renderer
   private _passthroughMask?: Float32Array
 
-  timerWorker?: Worker
+  // Two-loop state
+  private _segLoopActive = false
+  private _latestMask: Float32Array | null = null
+  private _renderLoopHandle: number | null = null
+
   virtualBackgroundImage?: HTMLImageElement
 
   private currentModel?: SegmentationModel
@@ -96,7 +95,6 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     this._createMainCanvas()
     this._createMaskCanvas()
 
-    // Initialize GPU renderer — throws and pushes to MattingErrorStore on failure.
     this.gpuRenderer = new WebGl2Renderer()
     await this.gpuRenderer.init(this.outputCanvas!, {
       outW: this.sourceSettings!.width || 1280,
@@ -123,16 +121,17 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     }
     this.processedTrack = tracks[0]
 
-    this._initWorker()
+    this._startLoops()
 
-    // Initialize MediaPipe in the background so init() returns immediately.
-    // _drawPassthrough() keeps the video visible until the segmenter is ready.
+    // Initialize segmenter in background — passthrough renders until it's ready.
     this._initSegmenterBackground(this._getModel(this.options))
   }
 
   async update(opts: ProcessorConfig): Promise<void> {
     const prevModel = this.currentModel
     const newModel = this._getModel(opts)
+    const prevRvmRatio = this._getRvmRatio(this.options)
+    const nextRvmRatio = this._getRvmRatio(opts)
     this.options = opts
     this.type = opts.type
     this.name = opts.type === ProcessorType.VIRTUAL ? 'virtual' : 'blur'
@@ -141,12 +140,18 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
 
     if (newModel !== prevModel) {
       if (this.segmenter) {
-        // Active segmenter: keep it running during load, swap atomically when ready.
         this._switchSegmenterBackground(newModel)
       } else {
-        // No active segmenter (still loading or failed): restart loading.
         this._initSegmenterBackground(newModel)
       }
+    } else if (
+      newModel === SegmentationModel.RVM &&
+      nextRvmRatio !== prevRvmRatio &&
+      this.segmenter instanceof RVMSegmenter
+    ) {
+      this.segmenter.setDownsampleRatio(
+        nextRvmRatio ?? this._autoRvmRatio()
+      )
     }
     this._applyRendererConfig()
   }
@@ -156,6 +161,20 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       return opts.model ?? SegmentationModel.LANDSCAPE
     }
     return SegmentationModel.LANDSCAPE
+  }
+
+  private _getRvmRatio(opts: ProcessorConfig): number | undefined {
+    if (opts.type === ProcessorType.BLUR || opts.type === ProcessorType.VIRTUAL) {
+      return opts.rvmDownsampleRatio
+    }
+    return undefined
+  }
+
+  private _autoRvmRatio(): number {
+    const w = this.sourceSettings?.width ?? 1280
+    if (w > 1920) return 0.125
+    if (w >= 720) return 0.25
+    return 0.5
   }
 
   private _getPostProcessingConfig(): PostProcessingConfig {
@@ -188,7 +207,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     return undefined
   }
 
-  /** Push current options (mode, blur, virtual bg, pre/post-processing) to the renderer. */
+
   private _applyRendererConfig() {
     if (!this.gpuRenderer) return
     const mode = this.options.type === ProcessorType.VIRTUAL ? 'virtual' : 'blur'
@@ -209,11 +228,13 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       preCfg?.roiCropping?.enabled ? new PreProcessingPipeline(preCfg) : undefined
   }
 
-  /** Initial load: no existing segmenter, shows passthrough until ready. */
   private async _initSegmenterBackground(model: SegmentationModel) {
     this._pendingModel = model
     try {
-      const seg = createSegmenter(model)
+      const seg = createSegmenter(model, {
+        rvmDownsampleRatio:
+          this._getRvmRatio(this.options) ?? this._autoRvmRatio(),
+      })
       await seg.init()
       if (this._pendingModel !== model) {
         seg.destroy()
@@ -227,7 +248,6 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       this._resolveReady()
     } catch (e) {
       if (this._pendingModel === model) {
-        // pushMattingError already called by the segmenter implementation.
         console.error('[AMP] segmenter init failed — running in passthrough mode', e)
         this.segmenter = undefined
         this._resolveReady()
@@ -235,11 +255,13 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     }
   }
 
-  /** Model switch: keep old segmenter running, atomically replace when new one is ready. */
   private async _switchSegmenterBackground(model: SegmentationModel) {
     this._pendingModel = model
     try {
-      const seg = createSegmenter(model)
+      const seg = createSegmenter(model, {
+        rvmDownsampleRatio:
+          this._getRvmRatio(this.options) ?? this._autoRvmRatio(),
+      })
       await seg.init()
       if (this._pendingModel !== model) {
         seg.destroy()
@@ -255,7 +277,6 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       this._resolveReady()
     } catch (e) {
       if (this._pendingModel === model) {
-        // pushMattingError already called by the segmenter implementation.
         console.error('[AMP] segmenter switch failed', e)
         this._resolveReady()
       }
@@ -267,6 +288,9 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     this.segmentationMaskCanvas?.setAttribute('height', '' + this.processingHeight)
     this.gpuRenderer?.resizeProcessing(this.processingWidth, this.processingHeight)
     this._passthroughMask = undefined
+    // Invalidate stale mask from old dimensions — render loop falls back to
+    // passthrough until the segmenter produces a mask at the new size.
+    this._latestMask = null
   }
 
   private _initVirtualBackgroundImage() {
@@ -275,8 +299,6 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       return
     }
     const path = this.options.imagePath
-    // Use a data attribute to compare paths without the absolute-URL issue
-    // (img.src always returns the absolute URL, but path is relative).
     const currentPath = this.virtualBackgroundImage?.dataset.srcPath
     if (currentPath === path) return
 
@@ -294,34 +316,114 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     this.virtualBackgroundImage = img
   }
 
-  private _initWorker() {
-    this.timerWorker = new Worker(timerWorkerScript, { name: 'AdvancedMatting' })
-    this.timerWorker.onmessage = (data) => this.onTimerMessage(data)
-    // readyState >= 2 (HAVE_CURRENT_DATA): video already loaded — start immediately.
-    // onloadeddata won't fire again (e.g. on Safari when the camera was already running).
+  // ─── Two-loop engine ────────────────────────────────────────────────────────
+
+  private _startLoops(): void {
     if (this.videoElementLoaded || this.videoElement!.readyState >= 2) {
-      this.videoElementLoaded = true
-      this.timerWorker.postMessage({ id: SET_TIMEOUT, timeMs: 1000 / 30 })
+      this._launch()
     } else {
-      this.videoElement!.onloadeddata = () => {
-        this.videoElementLoaded = true
-        this.timerWorker!.postMessage({ id: SET_TIMEOUT, timeMs: 1000 / 30 })
-      }
+      this.videoElement!.onloadeddata = () => this._launch()
     }
   }
 
-  private onTimerMessage(response: { data: { id: number } }) {
-    if (response.data.id === TIMEOUT_TICK) {
-      this.process()
+  private _launch(): void {
+    this.videoElementLoaded = true
+    this._segLoopActive = true
+    this._runSegmenterLoop()   // fire-and-forget
+    this._scheduleRender()
+  }
+
+  /**
+   * Segmenter loop: runs at most 30fps, writes the latest alpha mask to
+   * _latestMask. Capped so it does not starve the render loop or saturate the
+   * GPU when inference is faster than one frame period.
+   */
+  private async _runSegmenterLoop(): Promise<void> {
+    const TARGET_MS = 1000 / 50
+    while (this._segLoopActive) {
+      const t0 = performance.now()
+      const seg = this.segmenter
+      if (!seg || !this.videoElement || this.videoElement.videoWidth === 0) {
+        await new Promise<void>(r => setTimeout(r, TARGET_MS))
+        continue
+      }
+      try {
+        const cropBbox = this._preProcessingPipeline?.getNextCropBbox() ?? null
+        this.sizeSource(cropBbox)
+        const frameToSegment = this._preProcessingPipeline
+          ? this._preProcessingPipeline.apply(this.sourceImageData!, this._lastMask)
+          : this.sourceImageData!
+        const rawMask = await seg.segment(frameToSegment, performance.now())
+        if (!this._segLoopActive) return
+        if (this.segmenter === seg) {
+          const refinedMask = this._maybeApplyGuidedFilter(rawMask)
+          const mask = this._preProcessingPipeline
+            ? this._preProcessingPipeline.applyAfterInference(
+                refinedMask,
+                this.processingWidth,
+                this.processingHeight,
+                cropBbox
+              )
+            : refinedMask
+          this._lastMask = mask
+          this._latestMask = mask
+        }
+      } catch (e) {
+        if (!this._segLoopActive) return
+        console.error('[AMP] segmenter loop error', e)
+        pushMattingError({
+          code: 'SEGMENTER_TIMEOUT_PASSTHROUGH',
+          level: 'warn',
+          detail: e instanceof Error ? `${e.name}: ${e.message}` : String(e),
+        })
+        await new Promise<void>(r => setTimeout(r, 100))
+        continue
+      }
+      // Always yield to the event loop; sleep for whatever is left of 33ms.
+      // If inference took longer than one frame period, setTimeout(0) still
+      // lets the browser process render callbacks and input before looping.
+      const elapsed = performance.now() - t0
+      await new Promise<void>(r => setTimeout(r, Math.max(0, TARGET_MS - elapsed)))
     }
   }
+
+  // Render loop target: 50fps = 20ms per frame.
+  private static readonly RENDER_TARGET_MS = 1000 / 50
+  private _lastRenderTime = 0
+
+  private _scheduleRender(): void {
+    if (!this._segLoopActive) return
+    this._renderLoopHandle = requestAnimationFrame((now) => {
+      if (now - this._lastRenderTime >= AdvancedMattingProcessor.RENDER_TARGET_MS) {
+        this._lastRenderTime = now
+        this._renderFrame()
+      }
+      this._scheduleRender()
+    })
+  }
+
+  private _cancelRender(): void {
+    if (this._renderLoopHandle === null) return
+    cancelAnimationFrame(this._renderLoopHandle)
+    this._renderLoopHandle = null
+  }
+
+  private _renderFrame(): void {
+    if (!this.gpuRenderer || !this.videoElement || this.videoElement.videoWidth === 0) return
+    const mask = this._latestMask
+    if (mask) {
+      this.gpuRenderer.uploadMask(mask, this.processingWidth, this.processingHeight)
+      this.gpuRenderer.render(this.videoElement)
+    } else {
+      this._drawPassthrough()
+    }
+  }
+
+  // ────────────────────────────────────────────────────────────────────────────
 
   private sizeSource(cropBbox?: BBox | null) {
     const vw = this.videoElement!.videoWidth
     const vh = this.videoElement!.videoHeight
-    // When a crop bbox is provided, extract that region of the full-res video and
-    // scale it to the model input size — giving the segmenter ~2× effective resolution
-    // on the person's region compared to a full-frame downscale.
     const sx = cropBbox ? Math.round(cropBbox.x * vw) : 0
     const sy = cropBbox ? Math.round(cropBbox.y * vh) : 0
     const sw = cropBbox ? Math.round(cropBbox.width * vw) : vw
@@ -339,62 +441,23 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     )
   }
 
-  async process() {
-    if (!this.videoElement || this.videoElement.videoWidth === 0) {
-      this.timerWorker?.postMessage({ id: SET_TIMEOUT, timeMs: 1000 / 30 })
-      return
+  private _maybeApplyGuidedFilter(rawMask: Float32Array): Float32Array {
+    if (
+      this.options.type !== ProcessorType.BLUR &&
+      this.options.type !== ProcessorType.VIRTUAL
+    ) {
+      return rawMask
     }
+    const gf = this.options.postProcessing?.guidedFilter
+    if (!gf || !this.sourceImageData) return rawMask
 
-    // Segmenter not yet ready (still loading) — passthrough to keep video visible.
-    if (!this.segmenter) {
-      this._drawPassthrough()
-      this.timerWorker?.postMessage({ id: SET_TIMEOUT, timeMs: 1000 / 30 })
-      return
-    }
-
-    try {
-      // Ask the preprocessing pipeline for a spatial crop bbox (from last frame's mask).
-      const cropBbox = this._preProcessingPipeline?.getNextCropBbox() ?? null
-      this.sizeSource(cropBbox)
-
-      const frameToSegment = this._preProcessingPipeline
-        ? this._preProcessingPipeline.apply(this.sourceImageData!, this._lastMask)
-        : this.sourceImageData!
-
-      // Inference is in crop-bbox space when ROI cropping is active.
-      const rawMask = await this.segmenter!.segment(frameToSegment, performance.now())
-
-      // Remap from crop space → full-frame space and update RoiCropper state.
-      const mask = this._preProcessingPipeline
-        ? this._preProcessingPipeline.applyAfterInference(
-            rawMask,
-            this.processingWidth,
-            this.processingHeight,
-            cropBbox
-          )
-        : rawMask
-
-      this._lastMask = mask
-      this.gpuRenderer!.uploadMask(mask, this.processingWidth, this.processingHeight)
-      this.gpuRenderer!.render(this.videoElement!)
-    } catch (e) {
-      console.error('[AMP] process error', e)
-      pushMattingError({
-        code: 'SEGMENTER_TIMEOUT_PASSTHROUGH',
-        level: 'warn',
-        detail: e instanceof Error ? e.message : String(e),
-      })
-      this._drawPassthrough()
-    }
-    this.timerWorker?.postMessage({ id: SET_TIMEOUT, timeMs: 1000 / 30 })
+    return applyGuidedFilter(rawMask, this.sourceImageData, gf.radius, gf.eps)
   }
 
   private _drawPassthrough() {
     if (!this.gpuRenderer || !this.videoElement) return
     const w = this.processingWidth
     const h = this.processingHeight
-    // Upload an all-ones mask so the composite shader outputs fg = video frame.
-    // mix(bg, fg, 1.0) = fg — regardless of what the background mode is.
     if (!this._passthroughMask || this._passthroughMask.length !== w * h) {
       this._passthroughMask = new Float32Array(w * h).fill(1)
     }
@@ -414,7 +477,6 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       )
     }
     this.outputCanvas = canvas
-    // No Canvas2D context here — WebGl2Renderer.init() calls getContext('webgl2').
   }
 
   private _createMaskCanvas() {
@@ -452,15 +514,15 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
 
   async destroy() {
     this._pendingModel = undefined
-    this.timerWorker?.postMessage({ id: CLEAR_TIMEOUT })
-    this.timerWorker?.terminate()
-    this.timerWorker = undefined
+    this._segLoopActive = false
+    this._cancelRender()
     this.segmenter?.destroy()
     this.segmenter = undefined
     this.gpuRenderer?.destroy()
     this.gpuRenderer = undefined
     this._preProcessingPipeline = undefined
     this._lastMask = undefined
+    this._latestMask = null
     this._resolveReady()
   }
 }
