@@ -11,6 +11,7 @@ export enum ProcessorType {
 export enum SegmentationModel {
   LANDSCAPE = 'landscape',
   MULTICLASS = 'multiclass',
+  RVM = 'rvm',
 }
 
 export type MorphologyOp = 'erosion' | 'dilation' | 'opening' | 'closing'
@@ -27,6 +28,7 @@ export type ProcessorConfig =
       type: ProcessorType.BLUR
       blurRadius: number
       model?: SegmentationModel
+      rvmDownsampleRatio?: number
       postProcessing?: PostProcessingConfig
     }
   | {
@@ -34,6 +36,7 @@ export type ProcessorConfig =
       imagePath: string
       fileId?: string
       model?: SegmentationModel
+      rvmDownsampleRatio?: number
       postProcessing?: PostProcessingConfig
     }
   | ({ type: ProcessorType.FACE_LANDMARKS } & FaceLandmarksOptions)

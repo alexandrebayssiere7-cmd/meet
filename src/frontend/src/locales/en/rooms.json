@@ -259,7 +259,12 @@
       "model": {
         "title": "Segmentation model",
         "landscape": "Landscape (fast)",
-        "multiclass": "Multiclass (quality)"
+        "multiclass": "Multiclass (quality)",
+        "rvm": "RVM (recurrent, higher quality)"
+      },
+      "rvmDownsample": {
+        "manual": "Manual downsample ratio",
+        "label": "Downsample ratio (RVM)"
       },
       "postProcessing": {
         "title": "Post-processing",

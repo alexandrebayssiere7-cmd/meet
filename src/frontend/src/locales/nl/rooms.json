@@ -259,7 +259,12 @@
       "model": {
         "title": "Segmentatiemodel",
         "landscape": "Landscape (snel)",
-        "multiclass": "Multiclass (kwaliteit)"
+        "multiclass": "Multiclass (kwaliteit)",
+        "rvm": "RVM (recurrent, hogere kwaliteit)"
+      },
+      "rvmDownsample": {
+        "manual": "Handmatige downsample-ratio",
+        "label": "Downsample-ratio (RVM)"
       },
       "postProcessing": {
         "title": "Nabewerking",

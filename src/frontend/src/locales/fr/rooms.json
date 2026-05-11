@@ -259,7 +259,12 @@
       "model": {
         "title": "Modèle de segmentation",
         "landscape": "Landscape (rapide)",
-        "multiclass": "Multiclass (qualité)"
+        "multiclass": "Multiclass (qualité)",
+        "rvm": "RVM (récurrent, qualité supérieure)"
+      },
+      "rvmDownsample": {
+        "manual": "Downsample ratio manuel",
+        "label": "Downsample ratio (RVM)"
       },
       "postProcessing": {
         "title": "Post-traitement",
