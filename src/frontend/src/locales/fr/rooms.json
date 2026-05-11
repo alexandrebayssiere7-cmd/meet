@@ -269,18 +269,20 @@
         "title": "Post-traitement",
         "sigmoid": "Sigmoid",
         "erosion": "Érosion des bords",
-        "guidedFilter": "Guided Filter",
         "ema": "EMA"
+      },
+      "upsampling": {
+        "title": "Suréchantillonnage",
+        "guidedFilter": "Guided Filter (GPU)"
       },
       "params": {
         "sigmoidSteepness": "Pente sigmoid",
         "sigmoidThreshold": "Seuil sigmoid",
         "erosionPixels": "Pixels supprimés (bords)",
-        "guidedRadius": "Rayon (Guided Filter)",
-        "guidedEps": "Régularisation (Guided Filter)",
         "emaAlpha": "Réactivité (EMA)",
         "blurRadius": "Intensité du flou",
-        "guidedFilterCpuWarning": "Guided Filter s'exécute sur CPU (peut ralentir)"
+        "upsamplingRadius": "Rayon (Guided Filter)",
+        "upsamplingEps": "Régularisation (Guided Filter)"
       },
       "apply": "Appliquer"
     },

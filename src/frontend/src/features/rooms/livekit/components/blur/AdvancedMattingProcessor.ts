@@ -5,6 +5,7 @@ import {
   ProcessorType,
   SegmentationModel,
   PostProcessingConfig,
+  UpsamplingConfig,
   PreProcessingConfig,
 } from '.'
 import { PreProcessingPipeline } from './preprocessing/PreProcessingPipeline'
@@ -18,7 +19,6 @@ import {
 } from './TimerWorker'
 import { WebGl2Renderer } from './renderers/WebGl2Renderer'
 import { pushMattingError } from './errors/MattingErrorStore'
-import { applyGuidedFilter } from './postprocessing/GuidedFilter'
 
 const SEGMENTATION_MASK_CANVAS_ID = 'background-blur-local-segmentation'
 const BLUR_CANVAS_ID = 'background-blur-local'
@@ -104,6 +104,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       processingW: this.processingWidth,
       processingH: this.processingHeight,
       postProcessing: this._getPostProcessingConfig(),
+      upsampling: this._getUpsamplingConfig(),
     })
     this._applyRendererConfig()
 
@@ -162,9 +163,17 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       this.options.type === ProcessorType.BLUR ||
       this.options.type === ProcessorType.VIRTUAL
     ) {
-      // guidedFilter is CPU-only — strip it, send all GPU-capable steps.
-      const cfg = this.options.postProcessing ?? {}
-      return { sigmoid: cfg.sigmoid, erosion: cfg.erosion, ema: cfg.ema }
+      return this.options.postProcessing ?? {}
+    }
+    return {}
+  }
+
+  private _getUpsamplingConfig(): UpsamplingConfig {
+    if (
+      this.options.type === ProcessorType.BLUR ||
+      this.options.type === ProcessorType.VIRTUAL
+    ) {
+      return this.options.upsampling ?? {}
     }
     return {}
   }
@@ -188,6 +197,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       this.gpuRenderer.setBlurRadius(this.options.blurRadius ?? DEFAULT_BLUR)
     }
     this.gpuRenderer.setPostProcessing(this._getPostProcessingConfig())
+    this.gpuRenderer.setUpsampling(this._getUpsamplingConfig())
     this.gpuRenderer.setVirtualBackground(
       this.options.type === ProcessorType.VIRTUAL
         ? (this.virtualBackgroundImage ?? null)
@@ -354,18 +364,15 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       // Inference is in crop-bbox space when ROI cropping is active.
       const rawMask = await this.segmenter!.segment(frameToSegment, performance.now())
 
-      // Guided filter runs in crop space (sourceImageData and rawMask are aligned).
-      const refinedMask = this._maybeApplyGuidedFilter(rawMask)
-
       // Remap from crop space → full-frame space and update RoiCropper state.
       const mask = this._preProcessingPipeline
         ? this._preProcessingPipeline.applyAfterInference(
-            refinedMask,
+            rawMask,
             this.processingWidth,
             this.processingHeight,
             cropBbox
           )
-        : refinedMask
+        : rawMask
 
       this._lastMask = mask
       this.gpuRenderer!.uploadMask(mask, this.processingWidth, this.processingHeight)
@@ -380,25 +387,6 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       this._drawPassthrough()
     }
     this.timerWorker?.postMessage({ id: SET_TIMEOUT, timeMs: 1000 / 30 })
-  }
-
-  /**
-   * Run CPU guided filter if enabled.
-   * MediaPipe returns the mask in the same top-down order as ImageData (per the
-   * MPImage spec: "starting from the top-left corner, going left-to-right,
-   * top-to-bottom"), so no flip is needed — mask and guide are already aligned.
-   */
-  private _maybeApplyGuidedFilter(rawMask: Float32Array): Float32Array {
-    if (
-      this.options.type !== ProcessorType.BLUR &&
-      this.options.type !== ProcessorType.VIRTUAL
-    ) {
-      return rawMask
-    }
-    const gf = this.options.postProcessing?.guidedFilter
-    if (!gf || !this.sourceImageData) return rawMask
-
-    return applyGuidedFilter(rawMask, this.sourceImageData, gf.radius, gf.eps)
   }
 
   private _drawPassthrough() {
