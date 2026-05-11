@@ -5,7 +5,10 @@ import {
   ProcessorType,
   SegmentationModel,
   PostProcessingConfig,
+  PreProcessingConfig,
 } from '.'
+import { PreProcessingPipeline } from './preprocessing/PreProcessingPipeline'
+import { BBox } from './preprocessing/RoiCropper'
 import { Segmenter, createSegmenter } from './segmenters'
 import {
   CLEAR_TIMEOUT,
@@ -62,6 +65,8 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
   private processingHeight = 144
   private _pendingModel?: SegmentationModel
   private _readyResolvers: Array<() => void> = []
+  private _preProcessingPipeline?: PreProcessingPipeline
+  private _lastMask?: Float32Array
 
   constructor(opts: ProcessorConfig) {
     this.name = opts.type === ProcessorType.VIRTUAL ? 'virtual' : 'blur'
@@ -164,7 +169,17 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     return {}
   }
 
-  /** Push current options (mode, blur, virtual bg, post-processing) to the renderer. */
+  private _getPreProcessingConfig(): PreProcessingConfig | undefined {
+    if (
+      this.options.type === ProcessorType.BLUR ||
+      this.options.type === ProcessorType.VIRTUAL
+    ) {
+      return this.options.preProcessing
+    }
+    return undefined
+  }
+
+  /** Push current options (mode, blur, virtual bg, pre/post-processing) to the renderer. */
   private _applyRendererConfig() {
     if (!this.gpuRenderer) return
     const mode = this.options.type === ProcessorType.VIRTUAL ? 'virtual' : 'blur'
@@ -178,6 +193,10 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
         ? (this.virtualBackgroundImage ?? null)
         : null
     )
+
+    const preCfg = this._getPreProcessingConfig()
+    this._preProcessingPipeline =
+      preCfg?.roiCropping?.enabled ? new PreProcessingPipeline(preCfg) : undefined
   }
 
   /** Initial load: no existing segmenter, shows passthrough until ready. */
@@ -287,17 +306,20 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     }
   }
 
-  private sizeSource() {
+  private sizeSource(cropBbox?: BBox | null) {
+    const vw = this.videoElement!.videoWidth
+    const vh = this.videoElement!.videoHeight
+    // When a crop bbox is provided, extract that region of the full-res video and
+    // scale it to the model input size — giving the segmenter ~2× effective resolution
+    // on the person's region compared to a full-frame downscale.
+    const sx = cropBbox ? Math.round(cropBbox.x * vw) : 0
+    const sy = cropBbox ? Math.round(cropBbox.y * vh) : 0
+    const sw = cropBbox ? Math.round(cropBbox.width * vw) : vw
+    const sh = cropBbox ? Math.round(cropBbox.height * vh) : vh
     this.segmentationMaskCanvasCtx!.drawImage(
       this.videoElement!,
-      0,
-      0,
-      this.videoElement!.videoWidth,
-      this.videoElement!.videoHeight,
-      0,
-      0,
-      this.processingWidth,
-      this.processingHeight
+      sx, sy, sw, sh,
+      0, 0, this.processingWidth, this.processingHeight
     )
     this.sourceImageData = this.segmentationMaskCanvasCtx!.getImageData(
       0,
@@ -321,12 +343,31 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     }
 
     try {
-      this.sizeSource()
-      const rawMask = await this.segmenter!.segment(
-        this.sourceImageData!,
-        performance.now()
-      )
-      const mask = this._maybeApplyGuidedFilter(rawMask)
+      // Ask the preprocessing pipeline for a spatial crop bbox (from last frame's mask).
+      const cropBbox = this._preProcessingPipeline?.getNextCropBbox() ?? null
+      this.sizeSource(cropBbox)
+
+      const frameToSegment = this._preProcessingPipeline
+        ? this._preProcessingPipeline.apply(this.sourceImageData!, this._lastMask)
+        : this.sourceImageData!
+
+      // Inference is in crop-bbox space when ROI cropping is active.
+      const rawMask = await this.segmenter!.segment(frameToSegment, performance.now())
+
+      // Guided filter runs in crop space (sourceImageData and rawMask are aligned).
+      const refinedMask = this._maybeApplyGuidedFilter(rawMask)
+
+      // Remap from crop space → full-frame space and update RoiCropper state.
+      const mask = this._preProcessingPipeline
+        ? this._preProcessingPipeline.applyAfterInference(
+            refinedMask,
+            this.processingWidth,
+            this.processingHeight,
+            cropBbox
+          )
+        : refinedMask
+
+      this._lastMask = mask
       this.gpuRenderer!.uploadMask(mask, this.processingWidth, this.processingHeight)
       this.gpuRenderer!.render(this.videoElement!)
     } catch (e) {
@@ -430,6 +471,8 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     this.segmenter = undefined
     this.gpuRenderer?.destroy()
     this.gpuRenderer = undefined
+    this._preProcessingPipeline = undefined
+    this._lastMask = undefined
     this._resolveReady()
   }
 }

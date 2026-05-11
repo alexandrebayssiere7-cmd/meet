@@ -5,6 +5,7 @@ import {
   BackgroundProcessorFactory,
   BackgroundProcessorInterface,
   PostProcessingConfig,
+  PreProcessingConfig,
   ProcessorConfig,
   ProcessorType,
   SegmentationModel,
@@ -174,7 +175,7 @@ export const EffectsConfiguration = ({
     userChoices: { processorConfig },
   } = usePersistentUserChoices()
 
-  // ----- Advanced matting settings (model + post-processing toggles) -----
+  // ----- Advanced matting settings (model + pre/post-processing toggles) -----
   const initialModel: SegmentationModel =
     (processorConfig &&
       (processorConfig.type === ProcessorType.BLUR ||
@@ -187,6 +188,15 @@ export const EffectsConfiguration = ({
         processorConfig.type === ProcessorType.VIRTUAL) &&
       processorConfig.postProcessing) ||
     {}
+  const initialPRE: PreProcessingConfig =
+    (processorConfig &&
+      (processorConfig.type === ProcessorType.BLUR ||
+        processorConfig.type === ProcessorType.VIRTUAL) &&
+      processorConfig.preProcessing) ||
+    {}
+  const [roiCroppingEnabled, setRoiCroppingEnabled] = useState(
+    !!initialPRE.roiCropping?.enabled
+  )
   const [model, setModel] = useState<SegmentationModel>(initialModel)
   const [sigmoidEnabled, setSigmoidEnabled] = useState(!!initialPP.sigmoid)
   const [sigmoidSteepness, setSigmoidSteepness] = useState<number>(
@@ -222,6 +232,12 @@ export const EffectsConfiguration = ({
   const [blurRadiusValue, setBlurRadiusValue] =
     useState<number>(initialBlurRadius)
 
+  const buildPreProcessing = useCallback((): PreProcessingConfig => {
+    const cfg: PreProcessingConfig = {}
+    if (roiCroppingEnabled) cfg.roiCropping = { enabled: true }
+    return cfg
+  }, [roiCroppingEnabled])
+
   const buildPostProcessing = useCallback((): PostProcessingConfig => {
     const cfg: PostProcessingConfig = {}
     if (sigmoidEnabled)
@@ -254,11 +270,16 @@ export const EffectsConfiguration = ({
         config.type === ProcessorType.BLUR ||
         config.type === ProcessorType.VIRTUAL
       ) {
-        return { ...config, model, postProcessing: buildPostProcessing() }
+        return {
+          ...config,
+          model,
+          preProcessing: buildPreProcessing(),
+          postProcessing: buildPostProcessing(),
+        }
       }
       return config
     },
-    [model, buildPostProcessing]
+    [model, buildPreProcessing, buildPostProcessing]
   )
 
   const selectedId = useMemo(
@@ -1185,6 +1206,38 @@ export const EffectsConfiguration = ({
                       onChange={() => setModel(SegmentationModel.MULTICLASS)}
                     />
                     <Text variant="sm">{t('advanced.model.multiclass')}</Text>
+                  </label>
+                </div>
+
+                <H
+                  lvl={3}
+                  style={{ marginBottom: '0.4rem' }}
+                  variant="bodyXsMedium"
+                >
+                  {t('advanced.preProcessing.title')}
+                </H>
+                <div
+                  className={css({
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '0.35rem',
+                    marginBottom: '1rem',
+                  })}
+                >
+                  <label
+                    className={css({
+                      display: 'flex',
+                      gap: '0.4rem',
+                      alignItems: 'center',
+                      cursor: 'pointer',
+                    })}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={roiCroppingEnabled}
+                      onChange={(e) => setRoiCroppingEnabled(e.target.checked)}
+                    />
+                    <Text variant="sm">{t('advanced.preProcessing.roiCropping')}</Text>
                   </label>
                 </div>
 

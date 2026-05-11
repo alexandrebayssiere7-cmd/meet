@@ -22,11 +22,16 @@ export type PostProcessingConfig = {
   ema?: { alpha: number }
 }
 
+export type PreProcessingConfig = {
+  roiCropping?: { enabled: boolean }
+}
+
 export type ProcessorConfig =
   | {
       type: ProcessorType.BLUR
       blurRadius: number
       model?: SegmentationModel
+      preProcessing?: PreProcessingConfig
       postProcessing?: PostProcessingConfig
     }
   | {
@@ -34,6 +39,7 @@ export type ProcessorConfig =
       imagePath: string
       fileId?: string
       model?: SegmentationModel
+      preProcessing?: PreProcessingConfig
       postProcessing?: PostProcessingConfig
     }
   | ({ type: ProcessorType.FACE_LANDMARKS } & FaceLandmarksOptions)

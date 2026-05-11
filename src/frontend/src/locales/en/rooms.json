@@ -261,6 +261,10 @@
         "landscape": "Landscape (fast)",
         "multiclass": "Multiclass (quality)"
       },
+      "preProcessing": {
+        "title": "Pre-processing",
+        "roiCropping": "Person crop (ROI)"
+      },
       "postProcessing": {
         "title": "Post-processing",
         "sigmoid": "Sigmoid",

@@ -261,6 +261,10 @@
         "landscape": "Landscape (schnell)",
         "multiclass": "Multiclass (Qualität)"
       },
+      "preProcessing": {
+        "title": "Vorverarbeitung",
+        "roiCropping": "Personenausschnitt (ROI)"
+      },
       "postProcessing": {
         "title": "Nachbearbeitung",
         "sigmoid": "Sigmoid",

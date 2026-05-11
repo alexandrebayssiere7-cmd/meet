@@ -261,6 +261,10 @@
         "landscape": "Landscape (snel)",
         "multiclass": "Multiclass (kwaliteit)"
       },
+      "preProcessing": {
+        "title": "Voorbewerking",
+        "roiCropping": "Persoonsuitsnede (ROI)"
+      },
       "postProcessing": {
         "title": "Nabewerking",
         "sigmoid": "Sigmoid",
