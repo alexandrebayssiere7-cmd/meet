@@ -10,7 +10,8 @@ import { GpuGuidedFilter } from './GpuGuidedFilter'
  *   videoTex ← upload from <video>
  *   maskTex  ← uploaded once per new mask (uploadMask)
  *   maskRefined ← post-processing chain (sigmoid → morpho → ema)
- *   bgBlur ← (mode === 'blur') downsample(videoTex) → gauss-H → gauss-V
+ *   bgBlur ← (mode === 'blur') maskedDownsample(videoTex, mask)
+ *                              → maskWeightedGaussH → maskWeightedGaussV  (half-res)
  *           (mode === 'virtual') virtualBgTex
  *   canvas  ← composite(videoTex, bgBlur, maskRefined)
  *
@@ -40,8 +41,8 @@ export class WebGl2Renderer implements GpuRenderer {
   private pSigmoid!: WebGLProgram
   private pEma!: WebGLProgram
   private pCopyR!: WebGLProgram
-  private pBlurH!: WebGLProgram
-  private pBlurV!: WebGLProgram
+  private pMaskedDownsample!: WebGLProgram
+  private pMaskWeightedBlur!: WebGLProgram
   private pMorphology!: WebGLProgram
   private pComposite!: WebGLProgram
 
@@ -51,21 +52,21 @@ export class WebGl2Renderer implements GpuRenderer {
   private maskA!: WebGLTexture // R8 ping
   private maskB!: WebGLTexture // R8 pong
   private emaTex!: WebGLTexture // R8, persistent across frames
-  private bgQuarterTex!: WebGLTexture // RGBA quarter-res
-  private bgBlurH!: WebGLTexture // RGBA quarter-res
-  private bgBlurFinal!: WebGLTexture // RGBA quarter-res (after V pass)
+  private bgDownTex!: WebGLTexture // RGBA half-res masked downsample
+  private bgBlurPingTex!: WebGLTexture // RGBA half-res after H blur
+  private bgBlurPongTex!: WebGLTexture // RGBA half-res after V blur
   private virtualBgTex: WebGLTexture | null = null
 
   // FBOs
   private fboMaskA!: WebGLFramebuffer
   private fboMaskB!: WebGLFramebuffer
   private fboEma!: WebGLFramebuffer
-  private fboBgQuarter!: WebGLFramebuffer
-  private fboBgBlurH!: WebGLFramebuffer
-  private fboBgBlurFinal!: WebGLFramebuffer
+  private fboBgDown!: WebGLFramebuffer
+  private fboBgBlurPing!: WebGLFramebuffer
+  private fboBgBlurPong!: WebGLFramebuffer
 
-  private quarterW = 0
-  private quarterH = 0
+  private halfW = 0
+  private halfH = 0
   private hasEmaState = false
   private virtualImgPending: HTMLImageElement | null = null
   private virtualImgUploaded = false
@@ -96,8 +97,8 @@ export class WebGl2Renderer implements GpuRenderer {
     this.procH = opts.processingH
     this.postCfg = opts.postProcessing
     this.upsamplingCfg = opts.upsampling
-    this.quarterW = Math.max(2, Math.floor(this.outW / 4))
-    this.quarterH = Math.max(2, Math.floor(this.outH / 4))
+    this.halfW = Math.max(2, Math.floor(this.outW / 2))
+    this.halfH = Math.max(2, Math.floor(this.outH / 2))
 
     canvas.width = this.outW
     canvas.height = this.outH
@@ -236,7 +237,7 @@ export class WebGl2Renderer implements GpuRenderer {
     const finalMaskTex = this._upsampleMask(procMaskTex)
 
     // 4. Build background (blurred camera or virtual image).
-    const bgTex = this._buildBackground()
+    const bgTex = this._buildBackground(finalMaskTex)
 
     // 5. Composite to the canvas.
     gl.bindFramebuffer(gl.FRAMEBUFFER, null)
@@ -251,7 +252,6 @@ export class WebGl2Renderer implements GpuRenderer {
     gl.activeTexture(gl.TEXTURE2)
     gl.bindTexture(gl.TEXTURE_2D, finalMaskTex)
     gl.uniform1i(gl.getUniformLocation(this.pComposite, 'uMask'), 2)
-    gl.uniform1f(gl.getUniformLocation(this.pComposite, 'uFeather'), 0.08)
     gl.uniform1f(
       gl.getUniformLocation(this.pComposite, 'uErosionRadius'),
       this.postCfg.erosion?.pixels ?? 0
@@ -307,9 +307,9 @@ export class WebGl2Renderer implements GpuRenderer {
       this.maskA,
       this.maskB,
       this.emaTex,
-      this.bgQuarterTex,
-      this.bgBlurH,
-      this.bgBlurFinal,
+      this.bgDownTex,
+      this.bgBlurPingTex,
+      this.bgBlurPongTex,
       this.virtualBgTex,
     ]
     for (const t of tex) if (t) gl.deleteTexture(t)
@@ -317,9 +317,9 @@ export class WebGl2Renderer implements GpuRenderer {
       this.fboMaskA,
       this.fboMaskB,
       this.fboEma,
-      this.fboBgQuarter,
-      this.fboBgBlurH,
-      this.fboBgBlurFinal,
+      this.fboBgDown,
+      this.fboBgBlurPing,
+      this.fboBgBlurPong,
     ]
     for (const f of fbo) if (f) gl.deleteFramebuffer(f)
     if (this.quadBuffer) gl.deleteBuffer(this.quadBuffer)
@@ -329,8 +329,8 @@ export class WebGl2Renderer implements GpuRenderer {
       this.pSigmoid,
       this.pEma,
       this.pCopyR,
-      this.pBlurH,
-      this.pBlurV,
+      this.pMaskedDownsample,
+      this.pMaskWeightedBlur,
       this.pMorphology,
       this.pComposite,
     ]
@@ -435,7 +435,7 @@ export class WebGl2Renderer implements GpuRenderer {
     this._drawQuad()
   }
 
-  private _buildBackground(): WebGLTexture {
+  private _buildBackground(maskTex: WebGLTexture): WebGLTexture {
     const gl = this.gl
 
     if (this.mode === 'virtual') {
@@ -484,47 +484,57 @@ export class WebGl2Renderer implements GpuRenderer {
       // Fallback to blur if image not ready.
     }
 
-    // Blur path: downsample → gaussian H → gaussian V on quarter-res buffers.
-    const sigma = Math.max(0.5, this.blurRadius / 4)
-    gl.viewport(0, 0, this.quarterW, this.quarterH)
+    // Blur path: masked downsample → mask-weighted gaussian H → V on half-res buffers.
+    const radius = Math.max(1, this.blurRadius / 2)
+    gl.viewport(0, 0, this.halfW, this.halfH)
 
-    // Downsample (just sample with linear filter at 1/4 res).
-    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboBgQuarter)
-    gl.useProgram(this.pCopyR) // pCopyR is generic copy, works for RGBA too.
+    // Stage 1: masked downsample — 3x3 weighted average sampling the FULL-res
+    // source, normalised by accumulated bgWeight so transition-zone pixels
+    // don't darken the result (this is what causes the halo if omitted).
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboBgDown)
+    gl.useProgram(this.pMaskedDownsample)
     gl.activeTexture(gl.TEXTURE0)
     gl.bindTexture(gl.TEXTURE_2D, this.videoTex)
-    gl.uniform1i(gl.getUniformLocation(this.pCopyR, 'uTex'), 0)
-    this._drawQuad()
-
-    // Horizontal gaussian
-    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboBgBlurH)
-    gl.useProgram(this.pBlurH)
-    gl.activeTexture(gl.TEXTURE0)
-    gl.bindTexture(gl.TEXTURE_2D, this.bgQuarterTex)
-    gl.uniform1i(gl.getUniformLocation(this.pBlurH, 'uTex'), 0)
-    gl.uniform1f(gl.getUniformLocation(this.pBlurH, 'uSigma'), sigma)
+    gl.uniform1i(gl.getUniformLocation(this.pMaskedDownsample, 'uFrame'), 0)
+    gl.activeTexture(gl.TEXTURE1)
+    gl.bindTexture(gl.TEXTURE_2D, maskTex)
+    gl.uniform1i(gl.getUniformLocation(this.pMaskedDownsample, 'uMask'), 1)
     gl.uniform2f(
-      gl.getUniformLocation(this.pBlurH, 'uTexel'),
-      1 / this.quarterW,
-      1 / this.quarterH
+      gl.getUniformLocation(this.pMaskedDownsample, 'uSourceTexelSize'),
+      1.0 / this.outW,
+      1.0 / this.outH
     )
     this._drawQuad()
 
-    // Vertical gaussian
-    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboBgBlurFinal)
-    gl.useProgram(this.pBlurV)
+    // Stage 2: horizontal mask-weighted gaussian.
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboBgBlurPing)
+    gl.useProgram(this.pMaskWeightedBlur)
     gl.activeTexture(gl.TEXTURE0)
-    gl.bindTexture(gl.TEXTURE_2D, this.bgBlurH)
-    gl.uniform1i(gl.getUniformLocation(this.pBlurV, 'uTex'), 0)
-    gl.uniform1f(gl.getUniformLocation(this.pBlurV, 'uSigma'), sigma)
-    gl.uniform2f(
-      gl.getUniformLocation(this.pBlurV, 'uTexel'),
-      1 / this.quarterW,
-      1 / this.quarterH
-    )
+    gl.bindTexture(gl.TEXTURE_2D, this.bgDownTex)
+    gl.uniform1i(gl.getUniformLocation(this.pMaskWeightedBlur, 'uImage'), 0)
+    gl.activeTexture(gl.TEXTURE1)
+    gl.bindTexture(gl.TEXTURE_2D, maskTex)
+    gl.uniform1i(gl.getUniformLocation(this.pMaskWeightedBlur, 'uMask'), 1)
+    gl.uniform2f(gl.getUniformLocation(this.pMaskWeightedBlur, 'uDirection'), 1.0, 0.0)
+    gl.uniform2f(gl.getUniformLocation(this.pMaskWeightedBlur, 'uTexelSize'), 1.0 / this.halfW, 1.0 / this.halfH)
+    gl.uniform1f(gl.getUniformLocation(this.pMaskWeightedBlur, 'uRadius'), radius)
     this._drawQuad()
 
-    return this.bgBlurFinal
+    // Stage 3: vertical mask-weighted gaussian.
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboBgBlurPong)
+    gl.useProgram(this.pMaskWeightedBlur)
+    gl.activeTexture(gl.TEXTURE0)
+    gl.bindTexture(gl.TEXTURE_2D, this.bgBlurPingTex)
+    gl.uniform1i(gl.getUniformLocation(this.pMaskWeightedBlur, 'uImage'), 0)
+    gl.activeTexture(gl.TEXTURE1)
+    gl.bindTexture(gl.TEXTURE_2D, maskTex)
+    gl.uniform1i(gl.getUniformLocation(this.pMaskWeightedBlur, 'uMask'), 1)
+    gl.uniform2f(gl.getUniformLocation(this.pMaskWeightedBlur, 'uDirection'), 0.0, 1.0)
+    gl.uniform2f(gl.getUniformLocation(this.pMaskWeightedBlur, 'uTexelSize'), 1.0 / this.halfW, 1.0 / this.halfH)
+    gl.uniform1f(gl.getUniformLocation(this.pMaskWeightedBlur, 'uRadius'), radius)
+    this._drawQuad()
+
+    return this.bgBlurPongTex
   }
 
   private _drawQuad() {
@@ -626,31 +636,13 @@ export class WebGl2Renderer implements GpuRenderer {
     this.fboMaskB = makeFbo(this.maskB)
     this.fboEma = makeFbo(this.emaTex)
 
-    // BG quarter-res buffers (RGBA8)
-    this.bgQuarterTex = makeTex(
-      this.quarterW,
-      this.quarterH,
-      gl.RGBA,
-      gl.RGBA,
-      gl.UNSIGNED_BYTE
-    )
-    this.bgBlurH = makeTex(
-      this.quarterW,
-      this.quarterH,
-      gl.RGBA,
-      gl.RGBA,
-      gl.UNSIGNED_BYTE
-    )
-    this.bgBlurFinal = makeTex(
-      this.quarterW,
-      this.quarterH,
-      gl.RGBA,
-      gl.RGBA,
-      gl.UNSIGNED_BYTE
-    )
-    this.fboBgQuarter = makeFbo(this.bgQuarterTex)
-    this.fboBgBlurH = makeFbo(this.bgBlurH)
-    this.fboBgBlurFinal = makeFbo(this.bgBlurFinal)
+    // BG half-res buffers (RGBA8)
+    this.bgDownTex = makeTex(this.halfW, this.halfH, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE)
+    this.bgBlurPingTex = makeTex(this.halfW, this.halfH, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE)
+    this.bgBlurPongTex = makeTex(this.halfW, this.halfH, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE)
+    this.fboBgDown = makeFbo(this.bgDownTex)
+    this.fboBgBlurPing = makeFbo(this.bgBlurPingTex)
+    this.fboBgBlurPong = makeFbo(this.bgBlurPongTex)
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, null)
   }
@@ -732,43 +724,63 @@ void main() {
   fragColor = vec4(uAlpha * cur + (1.0 - uAlpha) * prev, 0.0, 0.0, 1.0);
 }`
 
-    const FS_BLUR_H = `#version 300 es
+    const FS_MASKED_DOWNSAMPLE = `#version 300 es
 precision mediump float;
 in vec2 vUv;
-uniform sampler2D uTex;
-uniform float uSigma;
-uniform vec2 uTexel;
+uniform sampler2D uFrame;
+uniform sampler2D uMask;
+uniform vec2 uSourceTexelSize; // 1/srcW, 1/srcH (full-res input)
 out vec4 fragColor;
 void main() {
-  // 9-tap gaussian, sigma in pixels (uSigma).
-  float wsum = 0.0;
   vec3 acc = vec3(0.0);
-  for (int i = -4; i <= 4; i++) {
-    float fi = float(i);
-    float w = exp(-(fi * fi) / (2.0 * uSigma * uSigma + 1e-6));
-    acc += texture(uTex, vUv + vec2(fi * uTexel.x, 0.0)).rgb * w;
-    wsum += w;
+  float wsum = 0.0;
+  for (int dy = -1; dy <= 1; dy++) {
+    for (int dx = -1; dx <= 1; dx++) {
+      vec2 sampleCoord = vUv + vec2(float(dx), float(dy)) * uSourceTexelSize;
+      float fg = texture(uMask, sampleCoord).r;
+      float bgWeight = 1.0 - smoothstep(0.12, 0.55, fg);
+      acc += texture(uFrame, sampleCoord).rgb * bgWeight;
+      wsum += bgWeight;
+    }
+  }
+  // Fallback: if the whole 3x3 is foreground, use the center sample unweighted
+  // (this region will be hidden by the foreground in the composite anyway).
+  if (wsum < 0.001) {
+    acc = texture(uFrame, vUv).rgb;
+    wsum = 1.0;
   }
   fragColor = vec4(acc / wsum, 1.0);
 }`
 
-    const FS_BLUR_V = `#version 300 es
+    const FS_MASK_WEIGHTED_BLUR = `#version 300 es
 precision mediump float;
 in vec2 vUv;
-uniform sampler2D uTex;
-uniform float uSigma;
-uniform vec2 uTexel;
+uniform sampler2D uImage;
+uniform sampler2D uMask;
+uniform vec2 uDirection;
+uniform vec2 uTexelSize;
+uniform float uRadius;
 out vec4 fragColor;
 void main() {
-  float wsum = 0.0;
+  float sigma = uRadius;
+  float twoSigmaSq = 2.0 * sigma * sigma;
   vec3 acc = vec3(0.0);
-  for (int i = -4; i <= 4; i++) {
-    float fi = float(i);
-    float w = exp(-(fi * fi) / (2.0 * uSigma * uSigma + 1e-6));
-    acc += texture(uTex, vUv + vec2(0.0, fi * uTexel.y)).rgb * w;
+  float wsum = 0.0;
+  const int MAX_SAMPLES = 16;
+  int radius = int(min(float(MAX_SAMPLES), ceil(uRadius)));
+  for (int i = -MAX_SAMPLES; i <= MAX_SAMPLES; ++i) {
+    float offset = float(i);
+    if (abs(offset) > float(radius)) continue;
+    float gaussW = exp(-(offset * offset) / twoSigmaSq);
+    vec2 sampleCoord = vUv + uDirection * uTexelSize * offset;
+    float maskVal = texture(uMask, sampleCoord).r;
+    // Floor at 0.001 to avoid div-by-zero; small enough to hide foreground ghosts.
+    float maskW = max(1.0 - maskVal, 0.001);
+    float w = gaussW * maskW;
+    acc += texture(uImage, sampleCoord).rgb * w;
     wsum += w;
   }
-  fragColor = vec4(acc / wsum, 1.0);
+  fragColor = vec4(acc / max(wsum, 0.001), 1.0);
 }`
 
     const FS_COMPOSITE = `#version 300 es
@@ -777,7 +789,6 @@ in vec2 vUv;
 uniform sampler2D uVideo;
 uniform sampler2D uBg;
 uniform sampler2D uMask;
-uniform float uFeather;
 uniform float uErosionRadius; // pixels at output resolution, 0 = disabled
 uniform vec2 uOutTexel;       // vec2(1/outW, 1/outH)
 out vec4 fragColor;
@@ -799,7 +810,8 @@ void main() {
       m = min(m, texture(uMask, vUv - vec2(0.0, uOutTexel.y * fi)).r);
     }
   }
-  float t = smoothstep(0.5 - uFeather, 0.5 + uFeather, m);
+  // +0.035 foreground bias preserves edges that conservative segmentation models clip.
+  float t = smoothstep(0.26, 0.72, clamp(m + 0.035, 0.0, 1.0));
   fragColor = vec4(mix(bg, fg, t), 1.0);
 }`
 
@@ -807,8 +819,8 @@ void main() {
     this.pSigmoid = this._link(VS, FS_SIGMOID)
     this.pEma = this._link(VS, FS_EMA)
     this.pCopyR = this._link(VS, FS_COPY_R)
-    this.pBlurH = this._link(VS, FS_BLUR_H)
-    this.pBlurV = this._link(VS, FS_BLUR_V)
+    this.pMaskedDownsample = this._link(VS, FS_MASKED_DOWNSAMPLE)
+    this.pMaskWeightedBlur = this._link(VS, FS_MASK_WEIGHTED_BLUR)
     
     const FS_MORPHOLOGY = `#version 300 es
 precision mediump float;
