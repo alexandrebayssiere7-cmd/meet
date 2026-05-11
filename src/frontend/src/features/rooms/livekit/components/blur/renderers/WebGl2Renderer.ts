@@ -42,6 +42,7 @@ export class WebGl2Renderer implements GpuRenderer {
   private pCopyR!: WebGLProgram
   private pBlurH!: WebGLProgram
   private pBlurV!: WebGLProgram
+  private pMorphology!: WebGLProgram
   private pComposite!: WebGLProgram
 
   // textures
@@ -330,6 +331,7 @@ export class WebGl2Renderer implements GpuRenderer {
       this.pCopyR,
       this.pBlurH,
       this.pBlurV,
+      this.pMorphology,
       this.pComposite,
     ]
     for (const p of programs) if (p) gl.deleteProgram(p)
@@ -377,6 +379,15 @@ export class WebGl2Renderer implements GpuRenderer {
       advance()
     }
 
+    // Closing (Dilation then Erosion to fill holes)
+    if (this.postCfg.closing && this.postCfg.closing.radius > 0) {
+      const r = this.postCfg.closing.radius
+      this._applyMorphology(dstFbo, src, r) // Dilation
+      advance()
+      this._applyMorphology(dstFbo, src, -r) // Erosion
+      advance()
+    }
+
     // EMA
     if (this.postCfg.ema) {
       const alpha = this.postCfg.ema.alpha
@@ -406,6 +417,22 @@ export class WebGl2Renderer implements GpuRenderer {
     }
 
     return src
+  }
+
+  private _applyMorphology(fbo: WebGLFramebuffer, src: WebGLTexture, radius: number) {
+    const gl = this.gl
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo)
+    gl.useProgram(this.pMorphology)
+    gl.activeTexture(gl.TEXTURE0)
+    gl.bindTexture(gl.TEXTURE_2D, src)
+    gl.uniform1i(gl.getUniformLocation(this.pMorphology, 'uTex'), 0)
+    gl.uniform1f(gl.getUniformLocation(this.pMorphology, 'uRadius'), radius)
+    gl.uniform2f(
+      gl.getUniformLocation(this.pMorphology, 'uTexel'),
+      1 / this.procW,
+      1 / this.procH
+    )
+    this._drawQuad()
   }
 
   private _buildBackground(): WebGLTexture {
@@ -782,6 +809,33 @@ void main() {
     this.pCopyR = this._link(VS, FS_COPY_R)
     this.pBlurH = this._link(VS, FS_BLUR_H)
     this.pBlurV = this._link(VS, FS_BLUR_V)
+    
+    const FS_MORPHOLOGY = `#version 300 es
+precision mediump float;
+in vec2 vUv;
+uniform sampler2D uTex;
+uniform float uRadius; // Positive = Dilation, Negative = Erosion
+uniform vec2 uTexel;
+out vec4 fragColor;
+void main() {
+  float r = abs(uRadius);
+  float val = texture(uTex, vUv).r;
+  for (float i = 1.0; i <= 8.0; i++) {
+    if (i > r) break;
+    vec2 off = uTexel * i;
+    float v1 = texture(uTex, vUv + vec2(off.x, 0.0)).r;
+    float v2 = texture(uTex, vUv - vec2(off.x, 0.0)).r;
+    float v3 = texture(uTex, vUv + vec2(0.0, off.y)).r;
+    float v4 = texture(uTex, vUv - vec2(0.0, off.y)).r;
+    if (uRadius > 0.0) {
+      val = max(val, max(max(v1, v2), max(v3, v4)));
+    } else {
+      val = min(val, min(min(v1, v2), min(v3, v4)));
+    }
+  }
+  fragColor = vec4(val, 0.0, 0.0, 1.0);
+}`
+    this.pMorphology = this._link(VS, FS_MORPHOLOGY)
     this.pComposite = this._link(VS, FS_COMPOSITE)
   }
 }

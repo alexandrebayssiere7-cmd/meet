@@ -16,6 +16,7 @@ export enum SegmentationModel {
 export type PostProcessingConfig = {
   sigmoid?: { steepness: number; threshold: number }
   erosion?: { pixels: number }
+  closing?: { radius: number }
   ema?: { alpha: number }
 }
 

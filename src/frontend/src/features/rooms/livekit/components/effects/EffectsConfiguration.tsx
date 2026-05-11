@@ -229,6 +229,10 @@ export const EffectsConfiguration = ({
   const [emaAlpha, setEmaAlpha] = useState<number>(
     initialPP.ema?.alpha ?? 0.5
   )
+  const [closingEnabled, setClosingEnabled] = useState(!!initialPP.closing)
+  const [closingRadius, setClosingRadius] = useState<number>(
+    initialPP.closing?.radius ?? 0
+  )
 
   // Continuous blur radius slider; only meaningful when a blur effect is selected.
   const initialBlurRadius =
@@ -251,6 +255,7 @@ export const EffectsConfiguration = ({
     if (erosionEnabled && erosionPixels > 0)
       cfg.erosion = { pixels: erosionPixels }
     if (emaEnabled) cfg.ema = { alpha: emaAlpha }
+    if (closingEnabled) cfg.closing = { radius: closingRadius }
     return cfg
   }, [
     sigmoidEnabled,
@@ -260,6 +265,8 @@ export const EffectsConfiguration = ({
     erosionPixels,
     emaEnabled,
     emaAlpha,
+    closingEnabled,
+    closingRadius,
   ])
 
   const buildUpsampling = useCallback((): UpsamplingConfig => {
@@ -1347,6 +1354,31 @@ export const EffectsConfiguration = ({
                     step={0.05}
                     disabled={!emaEnabled}
                     onChange={setEmaAlpha}
+                  />
+                  <label
+                    className={css({
+                      display: 'flex',
+                      gap: '0.4rem',
+                      alignItems: 'center',
+                      cursor: 'pointer',
+                    })}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={closingEnabled}
+                      onChange={(e) => setClosingEnabled(e.target.checked)}
+                    />
+                    <Text variant="sm">{t('advanced.postProcessing.holeFilling')}</Text>
+                  </label>
+                  <SliderRow
+                    label={t('advanced.params.holeFillingRadius')}
+                    displayValue={`${closingRadius} px`}
+                    value={closingRadius}
+                    min={0}
+                    max={8}
+                    step={1}
+                    disabled={!closingEnabled}
+                    onChange={setClosingRadius}
                   />
                 </div>
                 <H
