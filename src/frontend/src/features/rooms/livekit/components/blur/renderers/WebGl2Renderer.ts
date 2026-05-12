@@ -45,6 +45,36 @@ export class WebGl2Renderer implements GpuRenderer {
   private pMaskWeightedBlur!: WebGLProgram
   private pMorphology!: WebGLProgram
   private pComposite!: WebGLProgram
+  // Segmo-style virtual-background compositor (foreground recovery + edge-adaptive
+  // sharpening + closed-form alpha matting). Used ONLY when mode === 'virtual' and
+  // a virtual background image is uploaded. Never runs in the blur path.
+  private pCompositeSegmo!: WebGLProgram
+  // Edge-only feather pass: gaussian-blurs the mask near silhouette edges, leaves
+  // interior/exterior pixels untouched. Widens the transition band so segmo's
+  // closed-form matting has more pixels to operate on. Virtual path only.
+  private pSegmoEdgeFeather!: WebGLProgram
+  private segmoFeatheredMaskTex: WebGLTexture | null = null
+  private fboSegmoFeatheredMask: WebGLFramebuffer | null = null
+  private segmoFeatherRadius = 3.0
+  // Light wrap pass: mixes a small amount of background color into the foreground
+  // edge band so the subject looks lit by the new scene. Virtual path only,
+  // skipped entirely when strength <= 0.
+  private pLightWrap!: WebGLProgram
+  private segmoCompositeTex: WebGLTexture | null = null
+  private fboSegmoComposite: WebGLFramebuffer | null = null
+  private segmoLightWrapStrength = 0.08
+  // Foreground color cast: tints the camera frame toward the background's mean
+  // color so the subject reads as lit by the virtual scene. Pure GPU — mean
+  // colors live in the top mip of mipmapped textures and are sampled via
+  // textureLod (no readback). Virtual path only, skipped when strength <= 0.
+  private pMaskedFg!: WebGLProgram
+  private pFgColorCast!: WebGLProgram
+  private maskedFgTex: WebGLTexture | null = null
+  private fboMaskedFg: WebGLFramebuffer | null = null
+  private tintedVideoTex: WebGLTexture | null = null
+  private fboTintedVideo: WebGLFramebuffer | null = null
+  private segmoForegroundTintStrength = 0.15
+  private _segmoBgMipmapsValid = false
 
   // textures
   private videoTex!: WebGLTexture
@@ -239,6 +269,21 @@ export class WebGl2Renderer implements GpuRenderer {
     // 4. Build background (blurred camera or virtual image).
     const bgTex = this._buildBackground(finalMaskTex)
 
+    // 5. Composite — segmo-style path is taken ONLY for virtual mode with an
+    //    uploaded virtual background. The blur path (and the virtual-no-image
+    //    fallback, which currently returns the blurred camera) falls through to
+    //    the original composite below, unchanged.
+    if (
+      this.mode === 'virtual' &&
+      this.virtualImgUploaded &&
+      this.virtualBgTex !== null &&
+      bgTex === this.virtualBgTex
+    ) {
+      this._compositeVirtualSegmo(bgTex, finalMaskTex)
+      gl.flush()
+      return
+    }
+
     // 5. Composite to the canvas.
     gl.bindFramebuffer(gl.FRAMEBUFFER, null)
     gl.viewport(0, 0, this.outW, this.outH)
@@ -311,6 +356,10 @@ export class WebGl2Renderer implements GpuRenderer {
       this.bgBlurPingTex,
       this.bgBlurPongTex,
       this.virtualBgTex,
+      this.segmoFeatheredMaskTex,
+      this.segmoCompositeTex,
+      this.maskedFgTex,
+      this.tintedVideoTex,
     ]
     for (const t of tex) if (t) gl.deleteTexture(t)
     const fbo = [
@@ -320,6 +369,10 @@ export class WebGl2Renderer implements GpuRenderer {
       this.fboBgDown,
       this.fboBgBlurPing,
       this.fboBgBlurPong,
+      this.fboSegmoFeatheredMask,
+      this.fboSegmoComposite,
+      this.fboMaskedFg,
+      this.fboTintedVideo,
     ]
     for (const f of fbo) if (f) gl.deleteFramebuffer(f)
     if (this.quadBuffer) gl.deleteBuffer(this.quadBuffer)
@@ -333,6 +386,11 @@ export class WebGl2Renderer implements GpuRenderer {
       this.pMaskWeightedBlur,
       this.pMorphology,
       this.pComposite,
+      this.pCompositeSegmo,
+      this.pSegmoEdgeFeather,
+      this.pLightWrap,
+      this.pMaskedFg,
+      this.pFgColorCast,
     ]
     for (const p of programs) if (p) gl.deleteProgram(p)
   }
@@ -535,6 +593,263 @@ export class WebGl2Renderer implements GpuRenderer {
     this._drawQuad()
 
     return this.bgBlurPongTex
+  }
+
+  /**
+   * Segmo-style compositor for virtual backgrounds.
+   *
+   * Runs the foreground-recovery composite shader: edge-adaptive sharpening from
+   * the camera gradient, closed-form alpha matting on a 13-tap cross pattern in
+   * the transition zone, chroma-aware color-separation gate, and the VFX
+   * decontamination equation `output = I + (B_new − B_old) * (1 − α)` to remove
+   * the old background's color contribution from contaminated edge pixels.
+   *
+   * Intentionally does NOT include the erosion step from the standard compositor:
+   * segmo's transition-zone matting subsumes that need. The user-selectable
+   * postprocess chain (sigmoid/morphology/EMA/guided-upsample) ran upstream and
+   * is unaffected.
+   */
+  private _segmoLogged = false
+  private _ensureSegmoFeatherTarget() {
+    if (this.segmoFeatheredMaskTex && this.fboSegmoFeatheredMask) return
+    const gl = this.gl
+    const t = gl.createTexture()!
+    gl.bindTexture(gl.TEXTURE_2D, t)
+    gl.texImage2D(
+      gl.TEXTURE_2D, 0, gl.R8, this.outW, this.outH, 0,
+      gl.RED, gl.UNSIGNED_BYTE, null
+    )
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    const f = gl.createFramebuffer()!
+    gl.bindFramebuffer(gl.FRAMEBUFFER, f)
+    gl.framebufferTexture2D(
+      gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0
+    )
+    const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER)
+    if (status !== gl.FRAMEBUFFER_COMPLETE) {
+      throw new Error(`segmo feather FBO incomplete: 0x${status.toString(16)}`)
+    }
+    this.segmoFeatheredMaskTex = t
+    this.fboSegmoFeatheredMask = f
+  }
+
+  private _ensureSegmoCompositeTarget() {
+    if (this.segmoCompositeTex && this.fboSegmoComposite) return
+    const gl = this.gl
+    const t = gl.createTexture()!
+    gl.bindTexture(gl.TEXTURE_2D, t)
+    gl.texImage2D(
+      gl.TEXTURE_2D, 0, gl.RGBA, this.outW, this.outH, 0,
+      gl.RGBA, gl.UNSIGNED_BYTE, null
+    )
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    const f = gl.createFramebuffer()!
+    gl.bindFramebuffer(gl.FRAMEBUFFER, f)
+    gl.framebufferTexture2D(
+      gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0
+    )
+    const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER)
+    if (status !== gl.FRAMEBUFFER_COMPLETE) {
+      throw new Error(`segmo composite FBO incomplete: 0x${status.toString(16)}`)
+    }
+    this.segmoCompositeTex = t
+    this.fboSegmoComposite = f
+  }
+
+  private _ensureSegmoTintTargets() {
+    if (this.maskedFgTex && this.fboMaskedFg && this.tintedVideoTex && this.fboTintedVideo) return
+    const gl = this.gl
+    // Masked foreground: mipmapped, RGBA8. rgb = video * weight, a = weight.
+    // Top mip yields (sum(video*weight), sum(weight)) so the cast shader can
+    // recover the foreground mean color as rgb/a.
+    const mft = gl.createTexture()!
+    gl.bindTexture(gl.TEXTURE_2D, mft)
+    gl.texImage2D(
+      gl.TEXTURE_2D, 0, gl.RGBA, this.outW, this.outH, 0,
+      gl.RGBA, gl.UNSIGNED_BYTE, null
+    )
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    const mff = gl.createFramebuffer()!
+    gl.bindFramebuffer(gl.FRAMEBUFFER, mff)
+    gl.framebufferTexture2D(
+      gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, mft, 0
+    )
+    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+      throw new Error('segmo masked-fg FBO incomplete')
+    }
+
+    // Tinted video target: plain RGBA8, no mipmaps needed (it's consumed by
+    // a full-resolution sampler at mip 0).
+    const tvt = gl.createTexture()!
+    gl.bindTexture(gl.TEXTURE_2D, tvt)
+    gl.texImage2D(
+      gl.TEXTURE_2D, 0, gl.RGBA, this.outW, this.outH, 0,
+      gl.RGBA, gl.UNSIGNED_BYTE, null
+    )
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    const tvf = gl.createFramebuffer()!
+    gl.bindFramebuffer(gl.FRAMEBUFFER, tvf)
+    gl.framebufferTexture2D(
+      gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tvt, 0
+    )
+    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+      throw new Error('segmo tinted-video FBO incomplete')
+    }
+
+    this.maskedFgTex = mft
+    this.fboMaskedFg = mff
+    this.tintedVideoTex = tvt
+    this.fboTintedVideo = tvf
+  }
+
+  private _compositeVirtualSegmo(bgTex: WebGLTexture, maskTex: WebGLTexture) {
+    const gl = this.gl
+    if (!this._segmoLogged) {
+      this._segmoLogged = true
+      // One-shot confirmation that the segmo composite path is active.
+      console.log('[WebGl2Renderer] segmo virtual-bg composite active')
+    }
+
+    // Pass A: edge-only feather (widens the transition band near silhouettes,
+    // leaves interior/exterior alone). Output is R8 at output resolution.
+    this._ensureSegmoFeatherTarget()
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboSegmoFeatheredMask)
+    gl.viewport(0, 0, this.outW, this.outH)
+    gl.useProgram(this.pSegmoEdgeFeather)
+    gl.activeTexture(gl.TEXTURE0)
+    gl.bindTexture(gl.TEXTURE_2D, maskTex)
+    gl.uniform1i(gl.getUniformLocation(this.pSegmoEdgeFeather, 'uMask'), 0)
+    gl.uniform2f(
+      gl.getUniformLocation(this.pSegmoEdgeFeather, 'uTexel'),
+      1 / this.outW,
+      1 / this.outH
+    )
+    gl.uniform1f(
+      gl.getUniformLocation(this.pSegmoEdgeFeather, 'uRadius'),
+      this.segmoFeatherRadius
+    )
+    this._drawQuad()
+
+    // Passes T1+T2 (foreground color cast — pure GPU via mipmaps). Skipped when
+    // strength <= 0; otherwise produces tintedVideoTex which feeds the composite
+    // in place of videoTex. Bg mipmaps are regenerated lazily after each upload.
+    const useTint = this.segmoForegroundTintStrength > 0.0
+    let videoSrc: WebGLTexture = this.videoTex
+    if (useTint) {
+      // Lazy: ensure the bg texture has a mipmap chain after upload. Detects
+      // upload-completed transitions via virtualImgUploaded (reset to false in
+      // setVirtualBackground on every new image).
+      if (this.virtualImgUploaded && !this._segmoBgMipmapsValid && this.virtualBgTex) {
+        gl.bindTexture(gl.TEXTURE_2D, this.virtualBgTex)
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR)
+        gl.generateMipmap(gl.TEXTURE_2D)
+        this._segmoBgMipmapsValid = true
+      } else if (!this.virtualImgUploaded) {
+        this._segmoBgMipmapsValid = false
+      }
+
+      if (this._segmoBgMipmapsValid) {
+        this._ensureSegmoTintTargets()
+        // T1: render video × foreground weight to maskedFgTex. Weight in alpha
+        // lets the cast shader recover the weighted mean as rgb/a from the top
+        // mip level.
+        gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboMaskedFg)
+        gl.viewport(0, 0, this.outW, this.outH)
+        gl.useProgram(this.pMaskedFg)
+        gl.activeTexture(gl.TEXTURE0)
+        gl.bindTexture(gl.TEXTURE_2D, this.videoTex)
+        gl.uniform1i(gl.getUniformLocation(this.pMaskedFg, 'uVideo'), 0)
+        gl.activeTexture(gl.TEXTURE1)
+        gl.bindTexture(gl.TEXTURE_2D, this.segmoFeatheredMaskTex!)
+        gl.uniform1i(gl.getUniformLocation(this.pMaskedFg, 'uMask'), 1)
+        this._drawQuad()
+        // Build the mip pyramid so textureLod can fetch the global mean.
+        gl.bindTexture(gl.TEXTURE_2D, this.maskedFgTex!)
+        gl.generateMipmap(gl.TEXTURE_2D)
+
+        // T2: tint video toward bg's tint. Both means read from top mip via
+        // textureLod inside the shader.
+        gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboTintedVideo)
+        gl.viewport(0, 0, this.outW, this.outH)
+        gl.useProgram(this.pFgColorCast)
+        gl.activeTexture(gl.TEXTURE0)
+        gl.bindTexture(gl.TEXTURE_2D, this.videoTex)
+        gl.uniform1i(gl.getUniformLocation(this.pFgColorCast, 'uVideo'), 0)
+        gl.activeTexture(gl.TEXTURE1)
+        gl.bindTexture(gl.TEXTURE_2D, this.maskedFgTex!)
+        gl.uniform1i(gl.getUniformLocation(this.pFgColorCast, 'uFgMasked'), 1)
+        gl.activeTexture(gl.TEXTURE2)
+        gl.bindTexture(gl.TEXTURE_2D, bgTex)
+        gl.uniform1i(gl.getUniformLocation(this.pFgColorCast, 'uBg'), 2)
+        gl.uniform1f(
+          gl.getUniformLocation(this.pFgColorCast, 'uStrength'),
+          this.segmoForegroundTintStrength
+        )
+        this._drawQuad()
+        videoSrc = this.tintedVideoTex!
+      }
+    }
+
+    // Pass B: segmo composite, fed by the feathered mask. When light wrap is
+    // enabled we render to an intermediate texture; otherwise straight to canvas.
+    const useLightWrap = this.segmoLightWrapStrength > 0.0
+    if (useLightWrap) {
+      this._ensureSegmoCompositeTarget()
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboSegmoComposite)
+    } else {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    }
+    gl.viewport(0, 0, this.outW, this.outH)
+    gl.useProgram(this.pCompositeSegmo)
+    gl.activeTexture(gl.TEXTURE0)
+    gl.bindTexture(gl.TEXTURE_2D, videoSrc)
+    gl.uniform1i(gl.getUniformLocation(this.pCompositeSegmo, 'uVideo'), 0)
+    gl.activeTexture(gl.TEXTURE1)
+    gl.bindTexture(gl.TEXTURE_2D, bgTex)
+    gl.uniform1i(gl.getUniformLocation(this.pCompositeSegmo, 'uBg'), 1)
+    gl.activeTexture(gl.TEXTURE2)
+    gl.bindTexture(gl.TEXTURE_2D, this.segmoFeatheredMaskTex!)
+    gl.uniform1i(gl.getUniformLocation(this.pCompositeSegmo, 'uMask'), 2)
+    gl.uniform2f(
+      gl.getUniformLocation(this.pCompositeSegmo, 'uOutTexel'),
+      1 / this.outW,
+      1 / this.outH
+    )
+    this._drawQuad()
+
+    if (!useLightWrap) return
+
+    // Pass C: light wrap — mix a small amount of the background color into the
+    // narrow edge band so the subject looks lit by the virtual scene.
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    gl.viewport(0, 0, this.outW, this.outH)
+    gl.useProgram(this.pLightWrap)
+    gl.activeTexture(gl.TEXTURE0)
+    gl.bindTexture(gl.TEXTURE_2D, this.segmoCompositeTex!)
+    gl.uniform1i(gl.getUniformLocation(this.pLightWrap, 'uComposite'), 0)
+    gl.activeTexture(gl.TEXTURE1)
+    gl.bindTexture(gl.TEXTURE_2D, bgTex)
+    gl.uniform1i(gl.getUniformLocation(this.pLightWrap, 'uBg'), 1)
+    gl.activeTexture(gl.TEXTURE2)
+    gl.bindTexture(gl.TEXTURE_2D, this.segmoFeatheredMaskTex!)
+    gl.uniform1i(gl.getUniformLocation(this.pLightWrap, 'uMask'), 2)
+    gl.uniform1f(
+      gl.getUniformLocation(this.pLightWrap, 'uStrength'),
+      this.segmoLightWrapStrength
+    )
+    this._drawQuad()
   }
 
   private _drawQuad() {
@@ -849,5 +1164,241 @@ void main() {
 }`
     this.pMorphology = this._link(VS, FS_MORPHOLOGY)
     this.pComposite = this._link(VS, FS_COMPOSITE)
+
+    // Segmo-style compositor for virtual backgrounds. Ported from
+    // eyalfishler/segmo (src/shaders.ts COMPOSITE_SHADER, MIT).
+    // Implements:
+    //   - Edge-adaptive sharpening using camera RGB gradient
+    //   - Closed-form alpha matting on a 13-tap cross pattern
+    //   - Chroma-aware color-separation gate (disables matting when F≈B)
+    //   - Foreground recovery: output = I + (B_new − B_old) * (1 − α)
+    // Not used by the blur path.
+    const FS_COMPOSITE_SEGMO = `#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform sampler2D uVideo;     // Full-res camera frame
+uniform sampler2D uBg;        // Virtual background (full-res)
+uniform sampler2D uMask;      // Final processed mask
+uniform vec2 uOutTexel;       // (1/outW, 1/outH)
+out vec4 fragColor;
+
+// Cross-shaped sample pattern: wider reach for fg/bg color estimation (13 samples)
+const vec2 mOff[13] = vec2[13](
+  vec2(0.0, 0.0),
+  vec2(-1.0, 0.0), vec2(1.0, 0.0), vec2(0.0, -1.0), vec2(0.0, 1.0),
+  vec2(-2.0, 0.0), vec2(2.0, 0.0), vec2(0.0, -2.0), vec2(0.0, 2.0),
+  vec2(-3.0, 0.0), vec2(3.0, 0.0), vec2(0.0, -3.0), vec2(0.0, 3.0)
+);
+
+void main() {
+  float rawMask = texture(uMask, vUv).r;
+  vec3 I = texture(uVideo, vUv).rgb;
+
+  // Edge-adaptive sharpening: narrow the mask transition at strong camera edges
+  // (shoulders), widen it at weak edges (hair).
+  vec3 dx = I - texture(uVideo, vUv + vec2(uOutTexel.x, 0.0)).rgb;
+  vec3 dy = I - texture(uVideo, vUv + vec2(0.0, uOutTexel.y)).rgb;
+  float edgeStrength = dot(dx, dx) + dot(dy, dy);
+  float sharpness = smoothstep(0.001, 0.02, edgeStrength);
+  float lo = mix(0.15, 0.35, sharpness);
+  float hi = mix(0.85, 0.65, sharpness);
+  float mask = smoothstep(lo, hi, rawMask);
+
+  vec3 newBg = texture(uBg, vUv).rgb;
+
+  // Default output: standard alpha composite (used outside the transition zone).
+  vec3 result = mix(newBg, I, mask);
+
+  // Foreground recovery in transition zone [0.02, 0.98].
+  // Camera pixel is contaminated: I = F_true * α + B_old * (1 − α).
+  // We want: output = F_true * α + B_new * (1 − α).
+  // Therefore: output = I + (B_new − B_old) * (1 − α).
+  float inTransition = step(0.02, mask) * step(mask, 0.98);
+  if (inTransition > 0.5) {
+    vec3 fgColor = vec3(0.0);
+    vec3 bgColor = vec3(0.0);
+    float fgWeight = 0.0;
+    float bgWeight = 0.0;
+    vec2 sampleStep = uOutTexel * 4.0;
+
+    for (int i = 0; i < 13; i++) {
+      vec2 sc = vUv + mOff[i] * sampleStep;
+      float m = texture(uMask, sc).r;
+      vec3 col = texture(uVideo, sc).rgb;
+      float dist = length(mOff[i]);
+      float proximity = 1.0 / (1.0 + dist);
+      float fw = smoothstep(0.6, 0.9, m) * proximity;
+      float bw = smoothstep(0.4, 0.1, m) * proximity;
+      fgColor += col * fw;
+      fgWeight += fw;
+      bgColor += col * bw;
+      bgWeight += bw;
+    }
+
+    float hasBoth = step(0.01, fgWeight) * step(0.01, bgWeight);
+    if (hasBoth > 0.5) {
+      vec3 F = fgColor / fgWeight;
+      vec3 B = bgColor / bgWeight;
+      vec3 FB = F - B;
+      float denom = dot(FB, FB);
+
+      // Chroma-aware separation gate: disable matting when foreground and
+      // background colors are too similar (otherwise α is numerically unstable).
+      const vec3 lumW = vec3(0.299, 0.587, 0.114);
+      float fbLumDiff = dot(FB, lumW);
+      vec3 fbChromaDiff = FB - fbLumDiff;
+      float perceptualDenom = fbLumDiff * fbLumDiff + dot(fbChromaDiff, fbChromaDiff) * 3.0;
+      float colorSeparation = smoothstep(0.02, 0.08, perceptualDenom);
+
+      float mattedAlpha = clamp(dot(I - B, FB) / max(denom, 0.01), 0.0, 1.0);
+
+      float blendFactor = smoothstep(0.02, 0.15, rawMask)
+                        * (1.0 - smoothstep(0.9, 1.0, rawMask))
+                        * colorSeparation;
+      float alpha = mix(mask, mattedAlpha, blendFactor * 0.8);
+
+      vec3 recovered = I + (newBg - B) * (1.0 - alpha);
+      result = mix(result, clamp(recovered, 0.0, 1.0), blendFactor);
+    }
+  }
+
+  fragColor = vec4(result, 1.0);
+}`
+    this.pCompositeSegmo = this._link(VS, FS_COMPOSITE_SEGMO)
+
+    // Edge-only feather. Ported from eyalfishler/segmo (EDGE_FEATHER_SHADER, MIT).
+    // Detects edges (max neighbor mask diff), then blends a 5×5 gaussian-blurred
+    // mask value over the original only where an edge is present.
+    const FS_SEGMO_EDGE_FEATHER = `#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform sampler2D uMask;
+uniform vec2 uTexel;       // 1 / target dimensions (output resolution)
+uniform float uRadius;     // feather radius in texels (typical 2-5)
+out vec4 fragColor;
+
+void main() {
+  float center = texture(uMask, vUv).r;
+
+  vec2 edgeStep = uTexel * 2.0;
+  float maxDiff = 0.0;
+  maxDiff = max(maxDiff, abs(center - texture(uMask, vUv + vec2(-edgeStep.x, -edgeStep.y)).r));
+  maxDiff = max(maxDiff, abs(center - texture(uMask, vUv + vec2(0.0, -edgeStep.y)).r));
+  maxDiff = max(maxDiff, abs(center - texture(uMask, vUv + vec2(edgeStep.x, -edgeStep.y)).r));
+  maxDiff = max(maxDiff, abs(center - texture(uMask, vUv + vec2(-edgeStep.x, 0.0)).r));
+  maxDiff = max(maxDiff, abs(center - texture(uMask, vUv + vec2(edgeStep.x, 0.0)).r));
+  maxDiff = max(maxDiff, abs(center - texture(uMask, vUv + vec2(-edgeStep.x, edgeStep.y)).r));
+  maxDiff = max(maxDiff, abs(center - texture(uMask, vUv + vec2(0.0, edgeStep.y)).r));
+  maxDiff = max(maxDiff, abs(center - texture(uMask, vUv + vec2(edgeStep.x, edgeStep.y)).r));
+
+  float edgeness = smoothstep(0.02, 0.15, maxDiff);
+
+  if (edgeness < 0.01) {
+    fragColor = vec4(center, 0.0, 0.0, 1.0);
+    return;
+  }
+
+  // 5×5 gaussian: bDist[i] is the squared distance from center.
+  const float bDist[25] = float[25](
+    8.0, 5.0, 4.0, 5.0, 8.0,
+    5.0, 2.0, 1.0, 2.0, 5.0,
+    4.0, 1.0, 0.0, 1.0, 4.0,
+    5.0, 2.0, 1.0, 2.0, 5.0,
+    8.0, 5.0, 4.0, 5.0, 8.0
+  );
+  const vec2 bOff[25] = vec2[25](
+    vec2(-2.0, -2.0), vec2(-1.0, -2.0), vec2(0.0, -2.0), vec2(1.0, -2.0), vec2(2.0, -2.0),
+    vec2(-2.0, -1.0), vec2(-1.0, -1.0), vec2(0.0, -1.0), vec2(1.0, -1.0), vec2(2.0, -1.0),
+    vec2(-2.0,  0.0), vec2(-1.0,  0.0), vec2(0.0,  0.0), vec2(1.0,  0.0), vec2(2.0,  0.0),
+    vec2(-2.0,  1.0), vec2(-1.0,  1.0), vec2(0.0,  1.0), vec2(1.0,  1.0), vec2(2.0,  1.0),
+    vec2(-2.0,  2.0), vec2(-1.0,  2.0), vec2(0.0,  2.0), vec2(1.0,  2.0), vec2(2.0,  2.0)
+  );
+
+  vec2 blurStep = uTexel * uRadius;
+  float blurred = 0.0;
+  float totalWeight = 0.0;
+  for (int i = 0; i < 25; i++) {
+    // gaussian with sigma = 1 in cell units (segmo's formula collapses to this).
+    float weight = exp(-bDist[i] * 0.5);
+    blurred += texture(uMask, vUv + bOff[i] * blurStep).r * weight;
+    totalWeight += weight;
+  }
+  blurred /= totalWeight;
+
+  float result = mix(center, blurred, edgeness);
+  fragColor = vec4(result, 0.0, 0.0, 1.0);
+}`
+    this.pSegmoEdgeFeather = this._link(VS, FS_SEGMO_EDGE_FEATHER)
+
+    // Light wrap. Ported from eyalfishler/segmo (LIGHT_WRAP_SHADER, MIT).
+    // Adds subtle background spill onto foreground edge pixels so the subject
+    // looks lit by the virtual scene instead of pasted on top of it.
+    const FS_LIGHT_WRAP = `#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform sampler2D uComposite;   // segmo composite output
+uniform sampler2D uBg;          // virtual background
+uniform sampler2D uMask;        // feathered mask (same as composite consumed)
+uniform float uStrength;        // 0.05-0.15 typical
+out vec4 fragColor;
+
+void main() {
+  vec4 comp = texture(uComposite, vUv);
+  vec4 bg = texture(uBg, vUv);
+  float mask = texture(uMask, vUv).r;
+
+  // Narrow band right inside the silhouette (mask ≈ 0.5).
+  float edgeMask = smoothstep(0.25, 0.45, mask) * (1.0 - smoothstep(0.55, 0.75, mask));
+
+  fragColor = mix(comp, bg, edgeMask * uStrength);
+}`
+    this.pLightWrap = this._link(VS, FS_LIGHT_WRAP)
+
+    // Masked-foreground pre-pass for color cast. Writes rgb = video * weight,
+    // a = weight, where weight = smoothstep(0.3, 0.7, mask). Generating mipmaps
+    // on this target produces a top mip where rgb is the weighted sum and a is
+    // the weight sum; their ratio is the foreground mean color.
+    const FS_MASKED_FG = `#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform sampler2D uVideo;
+uniform sampler2D uMask;
+out vec4 fragColor;
+void main() {
+  float w = smoothstep(0.3, 0.7, texture(uMask, vUv).r);
+  vec3 v = texture(uVideo, vUv).rgb;
+  fragColor = vec4(v * w, w);
+}`
+    this.pMaskedFg = this._link(VS, FS_MASKED_FG)
+
+    // Foreground color cast. Reads global means from top mips via textureLod
+    // (the GPU clamps the LOD argument to the deepest available level — a 1×1
+    // or near-1 texel that holds the average of the texture). Computes a
+    // per-channel correction that shifts the foreground toward the background's
+    // tint, clamped to a safe range to protect skin tones, and applied at the
+    // requested strength.
+    const FS_FG_COLOR_CAST = `#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform sampler2D uVideo;
+uniform sampler2D uFgMasked;   // mipmapped: rgb = sum(video*w), a = sum(w)
+uniform sampler2D uBg;         // mipmapped
+uniform float uStrength;
+out vec4 fragColor;
+void main() {
+  vec3 video = texture(uVideo, vUv).rgb;
+  // 32.0 is well above the deepest mip level for any practical resolution;
+  // the sampler clamps to the top of the pyramid.
+  vec4 fgSum = textureLod(uFgMasked, vec2(0.5), 32.0);
+  vec3 fgMean = fgSum.rgb / max(fgSum.a, 0.001);
+  vec3 bgMean = textureLod(uBg, vec2(0.5), 32.0).rgb;
+
+  vec3 correction = bgMean / max(fgMean, vec3(0.01));
+  correction = clamp(correction, vec3(0.7), vec3(1.4));
+
+  vec3 tinted = mix(video, video * correction, uStrength);
+  fragColor = vec4(tinted, 1.0);
+}`
+    this.pFgColorCast = this._link(VS, FS_FG_COLOR_CAST)
   }
 }
