@@ -356,15 +356,14 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
         const rawMask = await seg.segment(frameToSegment, performance.now())
         if (!this._segLoopActive) return
         if (this.segmenter === seg) {
-          const refinedMask = this._maybeApplyGuidedFilter(rawMask)
           const mask = this._preProcessingPipeline
             ? this._preProcessingPipeline.applyAfterInference(
-                refinedMask,
+                rawMask,
                 this.processingWidth,
                 this.processingHeight,
                 cropBbox
               )
-            : refinedMask
+            : rawMask
           this._lastMask = mask
           this._latestMask = mask
         }
@@ -439,19 +438,6 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       this.processingWidth,
       this.processingHeight
     )
-  }
-
-  private _maybeApplyGuidedFilter(rawMask: Float32Array): Float32Array {
-    if (
-      this.options.type !== ProcessorType.BLUR &&
-      this.options.type !== ProcessorType.VIRTUAL
-    ) {
-      return rawMask
-    }
-    const gf = this.options.postProcessing?.guidedFilter
-    if (!gf || !this.sourceImageData) return rawMask
-
-    return applyGuidedFilter(rawMask, this.sourceImageData, gf.radius, gf.eps)
   }
 
   private _drawPassthrough() {
