@@ -1526,9 +1526,9 @@ export const EffectsConfiguration = ({
                     label={t('advanced.params.upsamplingChromaWeight')}
                     displayValue={upsamplingChromaWeight.toFixed(2)}
                     value={upsamplingChromaWeight}
-                    min={0.5}
-                    max={4}
-                    step={0.1}
+                    min={1}
+                    max={8}
+                    step={0.25}
                     disabled={!upsamplingGuided || !upsamplingChromaGuided}
                     onChange={setUpsamplingChromaWeight}
                   />
