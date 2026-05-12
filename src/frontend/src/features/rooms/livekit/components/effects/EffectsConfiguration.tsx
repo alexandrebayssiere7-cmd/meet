@@ -235,6 +235,12 @@ export const EffectsConfiguration = ({
   const [upsamplingEpsLog, setUpsamplingEpsLog] = useState<number>(
     Math.log10(initialUP.eps ?? 0.01)
   )
+  const [upsamplingChromaGuided, setUpsamplingChromaGuided] = useState(
+    !!initialUP.chromaWeight
+  )
+  const [upsamplingChromaWeight, setUpsamplingChromaWeight] = useState<number>(
+    initialUP.chromaWeight ?? 1.732
+  )
   const [emaEnabled, setEmaEnabled] = useState(!!initialPP.ema)
   const [emaAlpha, setEmaAlpha] = useState<number>(
     initialPP.ema?.alpha ?? 0.5
@@ -285,8 +291,9 @@ export const EffectsConfiguration = ({
       method: 'guided',
       radius: upsamplingRadius,
       eps: Math.pow(10, upsamplingEpsLog),
+      chromaWeight: upsamplingChromaGuided ? upsamplingChromaWeight : undefined,
     }
-  }, [upsamplingGuided, upsamplingRadius, upsamplingEpsLog])
+  }, [upsamplingGuided, upsamplingRadius, upsamplingEpsLog, upsamplingChromaGuided, upsamplingChromaWeight])
 
   const withAdvanced = useCallback(
     (config: ProcessorConfig): ProcessorConfig => {
@@ -1498,6 +1505,32 @@ export const EffectsConfiguration = ({
                     step={0.1}
                     disabled={!upsamplingGuided}
                     onChange={setUpsamplingEpsLog}
+                  />
+                  <label
+                    className={css({
+                      display: 'flex',
+                      gap: '0.4rem',
+                      alignItems: 'center',
+                      cursor: 'pointer',
+                    })}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={upsamplingChromaGuided}
+                      disabled={!upsamplingGuided}
+                      onChange={(e) => setUpsamplingChromaGuided(e.target.checked)}
+                    />
+                    <Text variant="sm">{t('advanced.upsampling.chromaGuide')}</Text>
+                  </label>
+                  <SliderRow
+                    label={t('advanced.params.upsamplingChromaWeight')}
+                    displayValue={upsamplingChromaWeight.toFixed(2)}
+                    value={upsamplingChromaWeight}
+                    min={0.5}
+                    max={4}
+                    step={0.1}
+                    disabled={!upsamplingGuided || !upsamplingChromaGuided}
+                    onChange={setUpsamplingChromaWeight}
                   />
                 </div>
                 {processorConfig &&

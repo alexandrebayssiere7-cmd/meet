@@ -336,9 +336,10 @@ export class WebGl2Renderer implements GpuRenderer {
         return procMaskTex
       }
     }
-    const radius = this.upsamplingCfg.radius ?? 8
-    const eps    = this.upsamplingCfg.eps    ?? 0.01
-    return this.gf.run(this.videoTex, procMaskTex, radius, eps, this.vao)
+    const radius      = this.upsamplingCfg.radius      ?? 8
+    const eps         = this.upsamplingCfg.eps         ?? 0.01
+    const chromaWeight = this.upsamplingCfg.chromaWeight
+    return this.gf.run(this.videoTex, procMaskTex, radius, eps, this.vao, chromaWeight)
   }
 
   destroy() {

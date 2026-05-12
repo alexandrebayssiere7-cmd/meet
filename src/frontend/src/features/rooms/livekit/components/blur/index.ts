@@ -25,6 +25,7 @@ export type UpsamplingConfig = {
   method?: 'bilinear' | 'guided'
   radius?: number
   eps?: number
+  chromaWeight?: number
 }
 
 export type PreProcessingConfig = {

@@ -278,7 +278,8 @@
       },
       "upsampling": {
         "title": "Upsampling",
-        "guidedFilter": "Guided Filter (GPU)"
+        "guidedFilter": "Guided Filter (GPU)",
+        "chromaGuide": "Chroma-weighted guide"
       },
       "params": {
         "sigmoidSteepness": "Sigmoid steepness",
@@ -287,7 +288,8 @@
         "emaAlpha": "Responsiveness (EMA)",
         "blurRadius": "Blur intensity",
         "upsamplingRadius": "Radius (Guided Filter)",
-        "upsamplingEps": "Regularization (Guided Filter)"
+        "upsamplingEps": "Regularization (Guided Filter)",
+        "upsamplingChromaWeight": "Chroma weight"
       },
       "apply": "Apply"
     },

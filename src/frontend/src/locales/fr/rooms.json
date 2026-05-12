@@ -278,7 +278,8 @@
       },
       "upsampling": {
         "title": "Suréchantillonnage",
-        "guidedFilter": "Guided Filter (GPU)"
+        "guidedFilter": "Guided Filter (GPU)",
+        "chromaGuide": "Guide pondéré par la chrominance"
       },
       "params": {
         "sigmoidSteepness": "Pente sigmoid",
@@ -287,7 +288,8 @@
         "emaAlpha": "Réactivité (EMA)",
         "blurRadius": "Intensité du flou",
         "upsamplingRadius": "Rayon (Guided Filter)",
-        "upsamplingEps": "Régularisation (Guided Filter)"
+        "upsamplingEps": "Régularisation (Guided Filter)",
+        "upsamplingChromaWeight": "Poids chrominance"
       },
       "apply": "Appliquer"
     },

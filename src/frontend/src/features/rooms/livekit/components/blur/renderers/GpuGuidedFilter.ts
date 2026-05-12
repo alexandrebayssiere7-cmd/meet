@@ -196,6 +196,25 @@ void main() {
   fragColor = vec4(q, 0.0, 0.0, 1.0);
 }`
 
+/**
+ * Chroma-amplified guide: RGB → [Y, w·Cb, w·Cr].
+ * Scaling chroma by w means chroma covariance terms get w² amplification,
+ * so chroma edges dominate over luminance edges in the guided filter.
+ */
+const FS_CHROMA_CONVERT = `#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform sampler2D uVideo;
+uniform float uChromaWeight;
+out vec4 fragColor;
+void main() {
+  vec3 c = texture(uVideo, vUv).rgb;
+  float Y  =  0.299 * c.r + 0.587 * c.g + 0.114 * c.b;
+  float Cb = -0.169 * c.r - 0.331 * c.g + 0.500 * c.b;
+  float Cr =  0.500 * c.r - 0.418 * c.g - 0.082 * c.b;
+  fragColor = vec4(Y, uChromaWeight * Cb, uChromaWeight * Cr, 1.0);
+}`
+
 export class GpuGuidedFilter {
   private gl: WebGL2RenderingContext
   private outW: number
@@ -221,6 +240,10 @@ export class GpuGuidedFilter {
   private fboCoeffMean!: WebGLFramebuffer
   private fboOut!: WebGLFramebuffer
 
+  // Chroma guide (optional pass)
+  private gfChromaGuide!: WebGLTexture
+  private fboChromaGuide!: WebGLFramebuffer
+
   // Programs
   private pHStats1!: WebGLProgram
   private pHStats2!: WebGLProgram
@@ -229,6 +252,7 @@ export class GpuGuidedFilter {
   private pBox!: WebGLProgram
   private pSolve!: WebGLProgram
   private pApply!: WebGLProgram
+  private pChromaConvert!: WebGLProgram
 
   constructor(gl: WebGL2RenderingContext, outW: number, outH: number) {
     this.gl = gl
@@ -239,19 +263,21 @@ export class GpuGuidedFilter {
 
   /**
    * Run guided filter upsampling.
-   * @param videoTex  Full-res RGBA8 video texture (outW×outH).
-   * @param maskTex   Low-res R8 mask texture (procW×procH), LINEAR filtered.
-   * @param radius    Box filter radius in output pixels.
-   * @param eps       Regularisation ε.
-   * @param vao       The full-screen triangle VAO from the parent renderer.
-   * @returns         RGBA32F texture (outW×outH) whose .r channel is the upsampled mask.
+   * @param videoTex     Full-res RGBA8 video texture (outW×outH).
+   * @param maskTex      Low-res R8 mask texture (procW×procH), LINEAR filtered.
+   * @param radius       Box filter radius in output pixels.
+   * @param eps          Regularisation ε.
+   * @param vao          The full-screen triangle VAO from the parent renderer.
+   * @param chromaWeight When > 0, convert guide to [Y, w·Cb, w·Cr] before filtering.
+   * @returns            RGBA32F texture (outW×outH) whose .r channel is the upsampled mask.
    */
   run(
     videoTex: WebGLTexture,
     maskTex: WebGLTexture,
     radius: number,
     eps: number,
-    vao: WebGLVertexArrayObject
+    vao: WebGLVertexArrayObject,
+    chromaWeight?: number
   ): WebGLTexture {
     const gl = this.gl
     const r = Math.max(1, Math.round(radius))
@@ -270,10 +296,22 @@ export class GpuGuidedFilter {
       gl.bindTexture(gl.TEXTURE_2D, tex)
     }
 
+    // ── optional chroma-guide conversion ────────────────────────────────────
+    let guideTex = videoTex
+    if (chromaWeight && chromaWeight > 0) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboChromaGuide)
+      gl.useProgram(this.pChromaConvert)
+      bindTex(0, videoTex)
+      gl.uniform1i(gl.getUniformLocation(this.pChromaConvert, 'uVideo'), 0)
+      gl.uniform1f(gl.getUniformLocation(this.pChromaConvert, 'uChromaWeight'), chromaWeight)
+      draw()
+      guideTex = this.gfChromaGuide
+    }
+
     // ── stats1: box(R, G, B, p) ──────────────────────────────────────────────
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboH)
     gl.useProgram(this.pHStats1)
-    bindTex(0, videoTex)
+    bindTex(0, guideTex)
     bindTex(1, maskTex)
     gl.uniform1i(gl.getUniformLocation(this.pHStats1, 'uVideo'),  0)
     gl.uniform1i(gl.getUniformLocation(this.pHStats1, 'uMask'),   1)
@@ -292,7 +330,7 @@ export class GpuGuidedFilter {
     // ── stats2: box(R², RG, RB, G²) ─────────────────────────────────────────
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboH)
     gl.useProgram(this.pHStats2)
-    bindTex(0, videoTex)
+    bindTex(0, guideTex)
     gl.uniform1i(gl.getUniformLocation(this.pHStats2, 'uVideo'),  0)
     gl.uniform1f(gl.getUniformLocation(this.pHStats2, 'uTexelX'), texelX)
     gl.uniform1i(gl.getUniformLocation(this.pHStats2, 'uRadius'), r)
@@ -309,7 +347,7 @@ export class GpuGuidedFilter {
     // ── stats3: box(GB, B², Rp, Gp) ─────────────────────────────────────────
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboH)
     gl.useProgram(this.pHStats3)
-    bindTex(0, videoTex)
+    bindTex(0, guideTex)
     bindTex(1, maskTex)
     gl.uniform1i(gl.getUniformLocation(this.pHStats3, 'uVideo'),  0)
     gl.uniform1i(gl.getUniformLocation(this.pHStats3, 'uMask'),   1)
@@ -328,7 +366,7 @@ export class GpuGuidedFilter {
     // ── stats4: box(Bp) ──────────────────────────────────────────────────────
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboH)
     gl.useProgram(this.pHStats4)
-    bindTex(0, videoTex)
+    bindTex(0, guideTex)
     bindTex(1, maskTex)
     gl.uniform1i(gl.getUniformLocation(this.pHStats4, 'uVideo'),  0)
     gl.uniform1i(gl.getUniformLocation(this.pHStats4, 'uMask'),   1)
@@ -376,9 +414,10 @@ export class GpuGuidedFilter {
     draw()
 
     // ── apply q = coeffMean · I + b ──────────────────────────────────────────
+    // Must use the same guide space that was used to fit the coefficients.
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboOut)
     gl.useProgram(this.pApply)
-    bindTex(0, videoTex)
+    bindTex(0, guideTex)
     bindTex(1, this.gfCoeffMean)
     gl.uniform1i(gl.getUniformLocation(this.pApply, 'uVideo'),     0)
     gl.uniform1i(gl.getUniformLocation(this.pApply, 'uCoeffMean'), 1)
@@ -392,16 +431,18 @@ export class GpuGuidedFilter {
     const textures = [
       this.gfH, this.gfStats1, this.gfStats2, this.gfStats3,
       this.gfStats4, this.gfCoeff, this.gfCoeffMean, this.gfOut,
+      this.gfChromaGuide,
     ]
     for (const t of textures) if (t) gl.deleteTexture(t)
     const fbos = [
       this.fboH, this.fboStats1, this.fboStats2, this.fboStats3,
       this.fboStats4, this.fboCoeff, this.fboCoeffMean, this.fboOut,
+      this.fboChromaGuide,
     ]
     for (const f of fbos) if (f) gl.deleteFramebuffer(f)
     const programs = [
       this.pHStats1, this.pHStats2, this.pHStats3, this.pHStats4,
-      this.pBox, this.pSolve, this.pApply,
+      this.pBox, this.pSolve, this.pApply, this.pChromaConvert,
     ]
     for (const p of programs) if (p) gl.deleteProgram(p)
   }
@@ -441,33 +482,36 @@ export class GpuGuidedFilter {
       return f
     }
 
-    this.gfH         = makeTex()
-    this.gfStats1    = makeTex()
-    this.gfStats2    = makeTex()
-    this.gfStats3    = makeTex()
-    this.gfStats4    = makeTex()
-    this.gfCoeff     = makeTex()
-    this.gfCoeffMean = makeTex()
-    this.gfOut       = makeTex()
+    this.gfH           = makeTex()
+    this.gfStats1      = makeTex()
+    this.gfStats2      = makeTex()
+    this.gfStats3      = makeTex()
+    this.gfStats4      = makeTex()
+    this.gfCoeff       = makeTex()
+    this.gfCoeffMean   = makeTex()
+    this.gfOut         = makeTex()
+    this.gfChromaGuide = makeTex()
 
-    this.fboH         = makeFbo(this.gfH)
-    this.fboStats1    = makeFbo(this.gfStats1)
-    this.fboStats2    = makeFbo(this.gfStats2)
-    this.fboStats3    = makeFbo(this.gfStats3)
-    this.fboStats4    = makeFbo(this.gfStats4)
-    this.fboCoeff     = makeFbo(this.gfCoeff)
-    this.fboCoeffMean = makeFbo(this.gfCoeffMean)
-    this.fboOut       = makeFbo(this.gfOut)
+    this.fboH           = makeFbo(this.gfH)
+    this.fboStats1      = makeFbo(this.gfStats1)
+    this.fboStats2      = makeFbo(this.gfStats2)
+    this.fboStats3      = makeFbo(this.gfStats3)
+    this.fboStats4      = makeFbo(this.gfStats4)
+    this.fboCoeff       = makeFbo(this.gfCoeff)
+    this.fboCoeffMean   = makeFbo(this.gfCoeffMean)
+    this.fboOut         = makeFbo(this.gfOut)
+    this.fboChromaGuide = makeFbo(this.gfChromaGuide)
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, null)
 
-    this.pHStats1 = this._link(VS, FS_H_STATS1)
-    this.pHStats2 = this._link(VS, FS_H_STATS2)
-    this.pHStats3 = this._link(VS, FS_H_STATS3)
-    this.pHStats4 = this._link(VS, FS_H_STATS4)
-    this.pBox     = this._link(VS, FS_BOX)
-    this.pSolve   = this._link(VS, FS_SOLVE)
-    this.pApply   = this._link(VS, FS_APPLY)
+    this.pHStats1      = this._link(VS, FS_H_STATS1)
+    this.pHStats2      = this._link(VS, FS_H_STATS2)
+    this.pHStats3      = this._link(VS, FS_H_STATS3)
+    this.pHStats4      = this._link(VS, FS_H_STATS4)
+    this.pBox          = this._link(VS, FS_BOX)
+    this.pSolve        = this._link(VS, FS_SOLVE)
+    this.pApply        = this._link(VS, FS_APPLY)
+    this.pChromaConvert = this._link(VS, FS_CHROMA_CONVERT)
   }
 
   private _compile(stage: number, src: string): WebGLShader {
