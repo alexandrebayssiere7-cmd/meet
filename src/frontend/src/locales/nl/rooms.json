@@ -258,6 +258,7 @@
       "title": "Geavanceerde instellingen",
       "model": {
         "title": "Segmentatiemodel",
+        "auto": "Geoptimaliseerd (automatisch)",
         "landscape": "Landscape (snel)",
         "multiclass": "Multiclass (kwaliteit)",
         "rvm": "RVM (recurrent, hogere kwaliteit)"

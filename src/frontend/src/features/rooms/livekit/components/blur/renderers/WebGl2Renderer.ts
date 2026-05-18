@@ -23,8 +23,8 @@ export class WebGl2Renderer implements GpuRenderer {
   readonly backend = 'webgl2'
 
   private gl!: WebGL2RenderingContext
-  private outW = 0
-  private outH = 0
+  outW = 0
+  outH = 0
   private procW = 0
   private procH = 0
   private postCfg: PostProcessingConfig = {}
@@ -180,6 +180,84 @@ export class WebGl2Renderer implements GpuRenderer {
       )
     }
     this.hasEmaState = false
+  }
+
+  resizeOutput(w: number, h: number) {
+    if (w === this.outW && h === this.outH) return
+    this.outW = w
+    this.outH = h
+    this.halfW = Math.max(2, Math.floor(w / 2))
+    this.halfH = Math.max(2, Math.floor(h / 2))
+
+    const gl = this.gl
+    if (!gl) return
+
+    // 1. Reallocate videoTex at new size
+    if (this.videoTex) {
+      gl.bindTexture(gl.TEXTURE_2D, this.videoTex)
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
+    }
+
+    // 2. Reallocate half-res textures
+    if (this.bgDownTex) {
+      gl.bindTexture(gl.TEXTURE_2D, this.bgDownTex)
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, this.halfW, this.halfH, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
+    }
+    if (this.bgBlurPingTex) {
+      gl.bindTexture(gl.TEXTURE_2D, this.bgBlurPingTex)
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, this.halfW, this.halfH, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
+    }
+    if (this.bgBlurPongTex) {
+      gl.bindTexture(gl.TEXTURE_2D, this.bgBlurPongTex)
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, this.halfW, this.halfH, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
+    }
+
+    // 3. Clear lazily-allocated Segmo textures so they get recreated at the new size
+    if (this.segmoFeatheredMaskTex) {
+      gl.deleteTexture(this.segmoFeatheredMaskTex)
+      this.segmoFeatheredMaskTex = null
+    }
+    if (this.fboSegmoFeatheredMask) {
+      gl.deleteFramebuffer(this.fboSegmoFeatheredMask)
+      this.fboSegmoFeatheredMask = null
+    }
+    if (this.segmoCompositeTex) {
+      gl.deleteTexture(this.segmoCompositeTex)
+      this.segmoCompositeTex = null
+    }
+    if (this.fboSegmoComposite) {
+      gl.deleteFramebuffer(this.fboSegmoComposite)
+      this.fboSegmoComposite = null
+    }
+    if (this.maskedFgTex) {
+      gl.deleteTexture(this.maskedFgTex)
+      this.maskedFgTex = null
+    }
+    if (this.fboMaskedFg) {
+      gl.deleteFramebuffer(this.fboMaskedFg)
+      this.fboMaskedFg = null
+    }
+    if (this.tintedVideoTex) {
+      gl.deleteTexture(this.tintedVideoTex)
+      this.tintedVideoTex = null
+    }
+    if (this.fboTintedVideo) {
+      gl.deleteFramebuffer(this.fboTintedVideo)
+      this.fboTintedVideo = null
+    }
+
+    // 4. Destroy Guided Filter so it gets recreated at the new size
+    if (this.gf) {
+      this.gf.destroy()
+      this.gf = null
+    }
+
+    // 5. Update canvas dimensions
+    const canvas = gl.canvas as HTMLCanvasElement
+    if (canvas) {
+      canvas.width = w
+      canvas.height = h
+    }
   }
 
   uploadMask(mask: Float32Array, w: number, h: number) {

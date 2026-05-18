@@ -21,11 +21,11 @@ export interface Segmenter {
 const MEDIAPIPE_WASM_URL =
   'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm'
 
-let _filesetPromise: ReturnType<typeof FilesetResolver.forVisionTasks> | null =
+let _filesetPromise: Promise<any> | null =
   null
 
 /** Cache the FilesetResolver across segmenter instances — it loads ~1MB of WASM. */
-export function getMediapipeFileset() {
+export function getMediapipeFileset(): Promise<any> {
   if (!_filesetPromise) {
     _filesetPromise = FilesetResolver.forVisionTasks(MEDIAPIPE_WASM_URL).catch(
       (e) => {

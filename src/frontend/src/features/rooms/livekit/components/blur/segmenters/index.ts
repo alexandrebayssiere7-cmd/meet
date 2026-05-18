@@ -6,6 +6,7 @@ import { Segmenter } from './Segmenter'
 
 export type { Segmenter } from './Segmenter'
 export { RVMSegmenter } from './RVMSegmenter'
+export { probeMediapipeDelegate } from './Segmenter'
 
 export interface CreateSegmenterOptions {
   rvmDownsampleRatio?: number

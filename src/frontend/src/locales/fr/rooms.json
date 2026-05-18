@@ -258,6 +258,7 @@
       "title": "Paramètres avancés",
       "model": {
         "title": "Modèle de segmentation",
+        "auto": "Optimisé (automatique)",
         "landscape": "Landscape (rapide)",
         "multiclass": "Multiclass (qualité)",
         "rvm": "RVM (récurrent, qualité supérieure)"

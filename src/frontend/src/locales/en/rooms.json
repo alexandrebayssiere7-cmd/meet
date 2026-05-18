@@ -258,6 +258,7 @@
       "title": "Advanced settings",
       "model": {
         "title": "Segmentation model",
+        "auto": "Optimized (automatic)",
         "landscape": "Landscape (fast)",
         "multiclass": "Multiclass (quality)",
         "rvm": "RVM (recurrent, higher quality)"

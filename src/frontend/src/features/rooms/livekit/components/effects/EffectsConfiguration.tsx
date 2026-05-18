@@ -182,7 +182,7 @@ export const EffectsConfiguration = ({
       (processorConfig.type === ProcessorType.BLUR ||
         processorConfig.type === ProcessorType.VIRTUAL) &&
       processorConfig.model) ||
-    SegmentationModel.LANDSCAPE
+    SegmentationModel.AUTO
   const initialPP: PostProcessingConfig =
     (processorConfig &&
       (processorConfig.type === ProcessorType.BLUR ||
@@ -1204,6 +1204,22 @@ export const EffectsConfiguration = ({
                     marginBottom: '1rem',
                   })}
                 >
+                  <label
+                    className={css({
+                      display: 'flex',
+                      gap: '0.4rem',
+                      alignItems: 'center',
+                      cursor: 'pointer',
+                    })}
+                  >
+                    <input
+                      type="radio"
+                      name="matting-model"
+                      checked={model === SegmentationModel.AUTO}
+                      onChange={() => setModel(SegmentationModel.AUTO)}
+                    />
+                    <Text variant="sm">{t('advanced.model.auto')}</Text>
+                  </label>
                   <label
                     className={css({
                       display: 'flex',

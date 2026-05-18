@@ -19,7 +19,7 @@ import { BBox, RoiCropper } from './RoiCropper'
 export class PreProcessingPipeline {
   private roiCropper?: RoiCropper
 
-  constructor(private cfg: PreProcessingConfig) {
+  constructor(cfg: PreProcessingConfig) {
     if (cfg.roiCropping?.enabled) this.roiCropper = new RoiCropper()
   }
 
@@ -40,7 +40,6 @@ export class PreProcessingPipeline {
    * @param prevMask Float32Array mask [0, 1] from the previous frame, in full-frame space
    */
   apply(frame: ImageData, prevMask?: Float32Array): ImageData {
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     void prevMask
     return frame
   }

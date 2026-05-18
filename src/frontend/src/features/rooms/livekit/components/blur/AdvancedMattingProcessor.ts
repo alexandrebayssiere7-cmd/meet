@@ -10,7 +10,7 @@ import {
 } from '.'
 import { PreProcessingPipeline } from './preprocessing/PreProcessingPipeline'
 import { BBox } from './preprocessing/RoiCropper'
-import { Segmenter, createSegmenter, RVMSegmenter } from './segmenters'
+import { Segmenter, createSegmenter, RVMSegmenter, probeMediapipeDelegate } from './segmenters'
 import { WebGl2Renderer } from './renderers/WebGl2Renderer'
 import { pushMattingError } from './errors/MattingErrorStore'
 
@@ -59,7 +59,8 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
 
   virtualBackgroundImage?: HTMLImageElement
 
-  private currentModel?: SegmentationModel
+  private _configuredModel?: SegmentationModel
+  currentModel?: SegmentationModel
   private processingWidth = 256
   private processingHeight = 144
   private _pendingModel?: SegmentationModel
@@ -90,55 +91,105 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     this.source = opts.track as MediaStreamTrack
     this.sourceSettings = this.source!.getSettings()
     this.videoElement = opts.element as HTMLVideoElement
+    const video = this.videoElement
 
-    this._initVirtualBackgroundImage()
-    this._createMainCanvas()
-    this._createMaskCanvas()
+    try {
+      if (video.videoWidth === 0 || video.readyState < 2) {
+        await new Promise<void>((resolve) => {
+          const handleLoaded = () => {
+            if (video.videoWidth > 0) {
+              cleanup()
+              resolve()
+            }
+          }
+          const cleanup = () => {
+            video.removeEventListener('loadedmetadata', handleLoaded)
+            video.removeEventListener('loadeddata', handleLoaded)
+            video.removeEventListener('canplay', handleLoaded)
+            video.removeEventListener('playing', handleLoaded)
+          }
+          video.addEventListener('loadedmetadata', handleLoaded)
+          video.addEventListener('loadeddata', handleLoaded)
+          video.addEventListener('canplay', handleLoaded)
+          video.addEventListener('playing', handleLoaded)
+          setTimeout(() => {
+            cleanup()
+            resolve()
+          }, 1000)
+        })
+      }
 
-    this.gpuRenderer = new WebGl2Renderer()
-    await this.gpuRenderer.init(this.outputCanvas!, {
-      outW: this.sourceSettings!.width || 1280,
-      outH: this.sourceSettings!.height || 720,
-      processingW: this.processingWidth,
-      processingH: this.processingHeight,
-      postProcessing: this._getPostProcessingConfig(),
-      upsampling: this._getUpsamplingConfig(),
-    })
-    this._applyRendererConfig()
+      const realW = video.videoWidth || this.sourceSettings!.width || 1280
+      const realH = video.videoHeight || this.sourceSettings!.height || 720
 
-    if (!this.outputCanvas!.captureStream) {
-      pushMattingError({
-        code: 'CAPTURESTREAM_UNSUPPORTED',
-        level: 'error',
-        detail: 'captureStream not supported on this browser',
+      this._initVirtualBackgroundImage()
+      this._createMainCanvasWithSize(realW, realH)
+      this._createMaskCanvas()
+
+      this.gpuRenderer = new WebGl2Renderer()
+      await this.gpuRenderer.init(this.outputCanvas!, {
+        outW: realW,
+        outH: realH,
+        processingW: this.processingWidth,
+        processingH: this.processingHeight,
+        postProcessing: this._getPostProcessingConfig(),
+        upsampling: this._getUpsamplingConfig(),
       })
-      throw new Error('[AMP] captureStream not supported on this browser')
-    }
-    const stream = this.outputCanvas!.captureStream(30)
-    const tracks = stream.getVideoTracks()
-    if (tracks.length === 0) {
-      throw new Error('[AMP] No tracks found in captureStream()')
-    }
-    this.processedTrack = tracks[0]
+      this._applyRendererConfig()
 
-    this._startLoops()
+      if (!this.outputCanvas!.captureStream) {
+        throw new Error('captureStream not supported on this browser')
+      }
+      const stream = this.outputCanvas!.captureStream(30)
+      const tracks = stream.getVideoTracks()
+      if (tracks.length === 0) {
+        throw new Error('No tracks found in captureStream()')
+      }
+      this.processedTrack = tracks[0]
 
-    // Initialize segmenter in background — passthrough renders until it's ready.
-    this._initSegmenterBackground(this._getModel(this.options))
+      this._startLoops()
+
+      this._configuredModel = this._getModel(this.options)
+      // Initialize segmenter in background — passthrough renders until it's ready.
+      this._initSegmenterBackground(this._configuredModel)
+    } catch (e) {
+      console.warn(
+        '%c┌────────────────────────────────────────────────────────────┐\n' +
+        '│ [AMP INIT] INITIALIZATION FAILED                           │\n' +
+        '├────────────────────────────────────────────────────────────┤\n' +
+        `│  Error: ${e instanceof Error ? e.message.padEnd(50).slice(0, 50) : String(e).padEnd(50).slice(0, 50)} │\n` +
+        '│  Falling back transparently to passthrough raw track.     │\n' +
+        '└────────────────────────────────────────────────────────────┘',
+        'color: #ef4444; font-weight: bold; font-family: monospace; font-size: 11px;'
+      )
+      pushMattingError({
+        code: 'WEBGL2_INIT_FAILED',
+        level: 'warn',
+        detail: e instanceof Error ? `${e.name}: ${e.message}` : String(e),
+      })
+      this.processedTrack = this.source
+    }
   }
 
   async update(opts: ProcessorConfig): Promise<void> {
-    const prevModel = this.currentModel
-    const newModel = this._getModel(opts)
-    const prevRvmRatio = this._getRvmRatio(this.options)
-    const nextRvmRatio = this._getRvmRatio(opts)
     this.options = opts
     this.type = opts.type
     this.name = opts.type === ProcessorType.VIRTUAL ? 'virtual' : 'blur'
 
+    if (!this.gpuRenderer) {
+      console.info('[AMP] Update called in passthrough fallback mode; ignoring background processor updates.')
+      return
+    }
+
+    const prevConfigured = this._configuredModel
+    const newModel = this._getModel(opts)
+    this._configuredModel = newModel
+    const prevRvmRatio = this._getRvmRatio(this.options)
+    const nextRvmRatio = this._getRvmRatio(opts)
+
     this._initVirtualBackgroundImage()
 
-    if (newModel !== prevModel) {
+    if (newModel !== prevConfigured) {
       if (this.segmenter) {
         this._switchSegmenterBackground(newModel)
       } else {
@@ -156,11 +207,136 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     this._applyRendererConfig()
   }
 
+
   private _getModel(opts: ProcessorConfig): SegmentationModel {
     if (opts.type === ProcessorType.BLUR || opts.type === ProcessorType.VIRTUAL) {
-      return opts.model ?? SegmentationModel.LANDSCAPE
+      return opts.model ?? SegmentationModel.AUTO
     }
-    return SegmentationModel.LANDSCAPE
+    return SegmentationModel.AUTO
+  }
+
+  private async _benchmarkSegmenter(seg: Segmenter): Promise<boolean> {
+    try {
+      const probe = await probeMediapipeDelegate()
+      if (probe === 'CPU') {
+        console.warn(
+          '%c┌────────────────────────────────────────────────────────────┐\n' +
+          '│ [AMP BENCHMARK] SKIPPED: CPU DELEGATE DETECTED             │\n' +
+          '├────────────────────────────────────────────────────────────┤\n' +
+          '│  Device WebGL Delegate is CPU.                             │\n' +
+          '│  To prevent performance degradation, benchmarking is       │\n' +
+          '│  skipped and Landscape fallback is automatically used.     │\n' +
+          '└────────────────────────────────────────────────────────────┘',
+          'color: #f59e0b; font-weight: bold; font-family: monospace; font-size: 11px;'
+        )
+        return false
+      }
+      
+      const width = seg.inputSize.width
+      const height = seg.inputSize.height
+      
+      const dummyCanvas = document.createElement('canvas')
+      dummyCanvas.width = width
+      dummyCanvas.height = height
+      const ctx = dummyCanvas.getContext('2d')
+      if (!ctx) return false
+      const dummyData = ctx.createImageData(width, height)
+      
+      try {
+        await seg.segment(dummyData, performance.now())
+      } catch (warmupErr) {
+        console.warn(
+          '%c┌────────────────────────────────────────────────────────────┐\n' +
+          '│ [AMP BENCHMARK] WARM-UP FAILED                             │\n' +
+          '├────────────────────────────────────────────────────────────┤\n' +
+          '│  Warm-up run threw an exception.                           │\n' +
+          '│  Safe fallback to Landscape mode initiated.                │\n' +
+          '└────────────────────────────────────────────────────────────┘',
+          'color: #ef4444; font-weight: bold; font-family: monospace; font-size: 11px;'
+        )
+        return false
+      }
+      
+      const runs = 4
+      let totalTime = 0
+      for (let i = 0; i < runs; i++) {
+        const start = performance.now()
+        await seg.segment(dummyData, performance.now())
+        totalTime += performance.now() - start
+      }
+      
+      const avg = totalTime / runs
+      const success = avg <= 30
+
+      const widthCard = 60
+      const padRight = (str: string, len: number) => str + ' '.repeat(Math.max(0, len - str.length))
+      
+      const titleLine = padRight(`  [AMP BENCHMARK] MULTICLASS PERFORMANCE`, widthCard)
+      const latencyLabel = `  Average Inference Latency: `
+      const latencyVal = `${avg.toFixed(2)} ms`
+      const latencyPadding = ' '.repeat(Math.max(0, widthCard - latencyLabel.length - latencyVal.length))
+      
+      const thresholdLine = padRight(`  Target Threshold:          30.00 ms`, widthCard)
+      const delegateLine = padRight(`  Device WebGL Delegate:     GPU`, widthCard)
+      const resultLabel = `  Evaluation Result:         `
+      const resultVal = success ? 'PASS (Use Multiclass)' : 'FAIL (Fallback to Landscape)'
+      const resultPadding = ' '.repeat(Math.max(0, widthCard - resultLabel.length - resultVal.length))
+
+      console.log(
+        `%c┌────────────────────────────────────────────────────────────┐\n` +
+        `%c│%c${titleLine}%c│\n` +
+        `%c├────────────────────────────────────────────────────────────┤\n` +
+        `%c│%c${latencyLabel}%c${latencyVal}%c${latencyPadding}│\n` +
+        `%c│%c${thresholdLine}%c│\n` +
+        `%c│%c${delegateLine}%c│\n` +
+        `%c├────────────────────────────────────────────────────────────┤\n` +
+        `%c│%c${resultLabel}%c${resultVal}%c${resultPadding}│\n` +
+        `%c└────────────────────────────────────────────────────────────┘`,
+        // Line 1: top border
+        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',
+        // Line 2: start, title, end
+        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',
+        'color: #60a5fa; font-weight: bold; font-family: monospace; font-size: 11px;',
+        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',
+        // Line 3: middle border
+        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',
+        // Line 4: start, latency label, latency val, end
+        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',
+        'color: #e2e8f0; font-family: monospace; font-size: 11px;',
+        'color: #f59e0b; font-weight: bold; font-family: monospace; font-size: 11px;',
+        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',
+        // Line 5: start, threshold, end
+        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',
+        'color: #e2e8f0; font-family: monospace; font-size: 11px;',
+        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',
+        // Line 6: start, delegate, end
+        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',
+        'color: #e2e8f0; font-family: monospace; font-size: 11px;',
+        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',
+        // Line 7: middle border
+        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',
+        // Line 8: start, result label, result val, end
+        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',
+        'color: #e2e8f0; font-family: monospace; font-size: 11px;',
+        success ? 'color: #10b981; font-weight: bold; font-family: monospace; font-size: 11px;' : 'color: #ef4444; font-weight: bold; font-family: monospace; font-size: 11px;',
+        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',
+        // Line 9: bottom border
+        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;'
+      )
+
+      return success
+    } catch (e) {
+      console.warn(
+        '%c┌────────────────────────────────────────────────────────────┐\n' +
+        '│ [AMP BENCHMARK] ERROR ENCOUNTERED                          │\n' +
+        '├────────────────────────────────────────────────────────────┤\n' +
+        '│  Benchmark execution failed.                               │\n' +
+        '│  Falling back safely to Landscape mode.                    │\n' +
+        '└────────────────────────────────────────────────────────────┘',
+        'color: #ef4444; font-weight: bold; font-family: monospace; font-size: 11px;'
+      )
+      return false
+    }
   }
 
   private _getRvmRatio(opts: ProcessorConfig): number | undefined {
@@ -231,17 +407,42 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
   private async _initSegmenterBackground(model: SegmentationModel) {
     this._pendingModel = model
     try {
-      const seg = createSegmenter(model, {
+      let targetModel = model
+      if (model === SegmentationModel.AUTO) {
+        targetModel = SegmentationModel.MULTICLASS
+      }
+
+      let seg = createSegmenter(targetModel, {
         rvmDownsampleRatio:
           this._getRvmRatio(this.options) ?? this._autoRvmRatio(),
       })
       await seg.init()
+
       if (this._pendingModel !== model) {
         seg.destroy()
         return
       }
+
+      if (model === SegmentationModel.AUTO) {
+        const isFastEnough = await this._benchmarkSegmenter(seg)
+        if (this._pendingModel !== model) {
+          seg.destroy()
+          return
+        }
+        if (!isFastEnough) {
+          seg.destroy()
+          targetModel = SegmentationModel.LANDSCAPE
+          seg = createSegmenter(targetModel)
+          await seg.init()
+          if (this._pendingModel !== model) {
+            seg.destroy()
+            return
+          }
+        }
+      }
+
       this.segmenter = seg
-      this.currentModel = model
+      this.currentModel = targetModel
       this.processingWidth = seg.inputSize.width
       this.processingHeight = seg.inputSize.height
       this._resizeMaskIfNeeded()
@@ -258,18 +459,43 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
   private async _switchSegmenterBackground(model: SegmentationModel) {
     this._pendingModel = model
     try {
-      const seg = createSegmenter(model, {
+      let targetModel = model
+      if (model === SegmentationModel.AUTO) {
+        targetModel = SegmentationModel.MULTICLASS
+      }
+
+      let seg = createSegmenter(targetModel, {
         rvmDownsampleRatio:
           this._getRvmRatio(this.options) ?? this._autoRvmRatio(),
       })
       await seg.init()
+
       if (this._pendingModel !== model) {
         seg.destroy()
         return
       }
+
+      if (model === SegmentationModel.AUTO) {
+        const isFastEnough = await this._benchmarkSegmenter(seg)
+        if (this._pendingModel !== model) {
+          seg.destroy()
+          return
+        }
+        if (!isFastEnough) {
+          seg.destroy()
+          targetModel = SegmentationModel.LANDSCAPE
+          seg = createSegmenter(targetModel)
+          await seg.init()
+          if (this._pendingModel !== model) {
+            seg.destroy()
+            return
+          }
+        }
+      }
+
       const old = this.segmenter
       this.segmenter = seg
-      this.currentModel = model
+      this.currentModel = targetModel
       this.processingWidth = seg.inputSize.width
       this.processingHeight = seg.inputSize.height
       old?.destroy()
@@ -409,6 +635,11 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
 
   private _renderFrame(): void {
     if (!this.gpuRenderer || !this.videoElement || this.videoElement.videoWidth === 0) return
+    const vw = this.videoElement.videoWidth
+    const vh = this.videoElement.videoHeight
+    if (vw !== this.gpuRenderer.outW || vh !== this.gpuRenderer.outH) {
+      this.gpuRenderer.resizeOutput(vw, vh)
+    }
     const mask = this._latestMask
     if (mask) {
       this.gpuRenderer.uploadMask(mask, this.processingWidth, this.processingHeight)
@@ -451,16 +682,15 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     this.gpuRenderer.render(this.videoElement)
   }
 
-  private _createMainCanvas() {
+  private _createMainCanvasWithSize(w: number, h: number) {
     let canvas = document.querySelector(
       `canvas#${BLUR_CANVAS_ID}`
     ) as HTMLCanvasElement | null
     if (!canvas) {
-      canvas = this._createCanvas(
-        BLUR_CANVAS_ID,
-        this.sourceSettings!.width || 1280,
-        this.sourceSettings!.height || 720
-      )
+      canvas = this._createCanvas(BLUR_CANVAS_ID, w, h)
+    } else {
+      canvas.setAttribute('width', '' + w)
+      canvas.setAttribute('height', '' + h)
     }
     this.outputCanvas = canvas
   }
@@ -500,8 +730,12 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
 
   async destroy() {
     this._pendingModel = undefined
+    this._configuredModel = undefined
     this._segLoopActive = false
     this._cancelRender()
+    if (this.videoElement) {
+      this.videoElement.onloadeddata = null
+    }
     this.segmenter?.destroy()
     this.segmenter = undefined
     this.gpuRenderer?.destroy()

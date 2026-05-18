@@ -9,10 +9,13 @@ export enum ProcessorType {
 }
 
 export enum SegmentationModel {
+  AUTO = 'auto',
   LANDSCAPE = 'landscape',
   MULTICLASS = 'multiclass',
   RVM = 'rvm',
 }
+
+export type MorphologyOp = 'erosion' | 'dilation' | 'opening' | 'closing'
 
 export type PostProcessingConfig = {
   sigmoid?: { steepness: number; threshold: number }
