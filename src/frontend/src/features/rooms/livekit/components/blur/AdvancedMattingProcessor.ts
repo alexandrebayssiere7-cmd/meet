@@ -64,6 +64,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
   private processingHeight = 144
   private _pendingModel?: SegmentationModel
   private _readyResolvers: Array<() => void> = []
+  private _destroyed = false
   private _preProcessingPipeline?: PreProcessingPipeline
   private _lastMask?: Float32Array
 
@@ -75,7 +76,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
 
   /** Resolves once the active segmenter is loaded and producing frames. */
   waitForReady(): Promise<void> {
-    if (this.segmenter) return Promise.resolve()
+    if (this.segmenter || this._destroyed) return Promise.resolve()
     return new Promise(resolve => this._readyResolvers.push(resolve))
   }
 
@@ -84,6 +85,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
   }
 
   async init(opts: ProcessorOptions<Track.Kind>) {
+    this._destroyed = false
     if (!opts.element) {
       throw new Error('Element is required for processing')
     }
@@ -93,6 +95,8 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     const video = this.videoElement
 
     try {
+      if (this._destroyed) return
+
       if (video.videoWidth === 0 || video.readyState < 2) {
         await new Promise<void>((resolve) => {
           const handleLoaded = () => {
@@ -118,12 +122,16 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
         })
       }
 
+      if (this._destroyed) return
+
       const realW = video.videoWidth || this.sourceSettings!.width || 1280
       const realH = video.videoHeight || this.sourceSettings!.height || 720
 
       this._initVirtualBackgroundImage()
       this._createMainCanvasWithSize(realW, realH)
       this._createMaskCanvas()
+
+      if (this._destroyed) return
 
       this.gpuRenderer = new WebGl2Renderer()
       await this.gpuRenderer.init(this.outputCanvas!, {
@@ -136,6 +144,8 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       })
       this._applyRendererConfig()
 
+      if (this._destroyed) return
+
       if (!this.outputCanvas!.captureStream) {
         throw new Error('captureStream not supported on this browser')
       }
@@ -145,6 +155,16 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
         throw new Error('No tracks found in captureStream()')
       }
       this.processedTrack = tracks[0]
+
+      if (this._destroyed) {
+        if (this.processedTrack && this.processedTrack !== this.source) {
+          try {
+            this.processedTrack.stop()
+          } catch {}
+        }
+        this.processedTrack = undefined
+        return
+      }
 
       this._startLoops()
 
@@ -249,6 +269,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       const runs = 4
       let totalTime = 0
       for (let i = 0; i < runs; i++) {
+        if (this._destroyed) return false
         const start = performance.now()
         await seg.segment(dummyData, performance.now())
         totalTime += performance.now() - start
@@ -380,6 +401,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
   }
 
   private async _initSegmenterBackground(model: SegmentationModel) {
+    if (this._destroyed) return
     this._pendingModel = model
     try {
       let targetModel = model
@@ -390,14 +412,14 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       let seg = createSegmenter(targetModel)
       await seg.init()
 
-      if (this._pendingModel !== model) {
+      if (this._destroyed || this._pendingModel !== model) {
         seg.destroy()
         return
       }
 
       if (model === SegmentationModel.AUTO) {
         const isFastEnough = await this._benchmarkSegmenter(seg)
-        if (this._pendingModel !== model) {
+        if (this._destroyed || this._pendingModel !== model) {
           seg.destroy()
           return
         }
@@ -406,11 +428,16 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
           targetModel = SegmentationModel.LANDSCAPE
           seg = createSegmenter(targetModel)
           await seg.init()
-          if (this._pendingModel !== model) {
+          if (this._destroyed || this._pendingModel !== model) {
             seg.destroy()
             return
           }
         }
+      }
+
+      if (this._destroyed) {
+        seg.destroy()
+        return
       }
 
       this.segmenter = seg
@@ -420,7 +447,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       this._resizeMaskIfNeeded()
       this._resolveReady()
     } catch (e) {
-      if (this._pendingModel === model) {
+      if (!this._destroyed && this._pendingModel === model) {
         console.error('[AMP] segmenter init failed — running in passthrough mode', e)
         this.segmenter = undefined
         this._resolveReady()
@@ -429,6 +456,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
   }
 
   private async _switchSegmenterBackground(model: SegmentationModel) {
+    if (this._destroyed) return
     this._pendingModel = model
     try {
       let targetModel = model
@@ -439,14 +467,14 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       let seg = createSegmenter(targetModel)
       await seg.init()
 
-      if (this._pendingModel !== model) {
+      if (this._destroyed || this._pendingModel !== model) {
         seg.destroy()
         return
       }
 
       if (model === SegmentationModel.AUTO) {
         const isFastEnough = await this._benchmarkSegmenter(seg)
-        if (this._pendingModel !== model) {
+        if (this._destroyed || this._pendingModel !== model) {
           seg.destroy()
           return
         }
@@ -455,11 +483,16 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
           targetModel = SegmentationModel.LANDSCAPE
           seg = createSegmenter(targetModel)
           await seg.init()
-          if (this._pendingModel !== model) {
+          if (this._destroyed || this._pendingModel !== model) {
             seg.destroy()
             return
           }
         }
+      }
+
+      if (this._destroyed) {
+        seg.destroy()
+        return
       }
 
       const old = this.segmenter
@@ -471,7 +504,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       this._resizeMaskIfNeeded()
       this._resolveReady()
     } catch (e) {
-      if (this._pendingModel === model) {
+      if (!this._destroyed && this._pendingModel === model) {
         console.error('[AMP] segmenter switch failed', e)
         this._resolveReady()
       }
@@ -514,14 +547,19 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
   // ─── Two-loop engine ────────────────────────────────────────────────────────
 
   private _startLoops(): void {
+    if (this._destroyed) return
     if (this.videoElementLoaded || this.videoElement!.readyState >= 2) {
       this._launch()
     } else {
-      this.videoElement!.onloadeddata = () => this._launch()
+      this.videoElement!.onloadeddata = () => {
+        if (this._destroyed) return
+        this._launch()
+      }
     }
   }
 
   private _launch(): void {
+    if (this._destroyed) return
     this.videoElementLoaded = true
     this._segLoopActive = true
     this._runSegmenterLoop()   // fire-and-forget
@@ -535,7 +573,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
    */
   private async _runSegmenterLoop(): Promise<void> {
     const TARGET_MS = 1000 / 50
-    while (this._segLoopActive) {
+    while (this._segLoopActive && !this._destroyed) {
       const t0 = performance.now()
       const seg = this.segmenter
       if (!seg || !this.videoElement || this.videoElement.videoWidth === 0) {
@@ -698,6 +736,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
   }
 
   async destroy() {
+    this._destroyed = true
     this._pendingModel = undefined
     this._configuredModel = undefined
     this._segLoopActive = false
@@ -713,5 +752,14 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     this._lastMask = undefined
     this._latestMask = null
     this._resolveReady()
+
+    if (this.processedTrack && this.processedTrack !== this.source) {
+      try {
+        this.processedTrack.stop()
+      } catch (e) {
+        console.warn('[AMP] Failed to stop canvas capture track during destroy:', e)
+      }
+    }
+    this.processedTrack = undefined
   }
 }
