@@ -680,7 +680,12 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     }
     const mask = this._latestMask
     if (mask) {
-      this.gpuRenderer.uploadMask(mask, this.processingWidth, this.processingHeight)
+      this.gpuRenderer.uploadMask(
+        mask,
+        this.processingWidth,
+        this.processingHeight,
+        this.segmenter?.needsMaskInversion ?? false
+      )
       this.gpuRenderer.render(this.videoElement)
     } else {
       this._drawPassthrough()
