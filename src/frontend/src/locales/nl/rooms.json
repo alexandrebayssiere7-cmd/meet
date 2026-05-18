@@ -254,44 +254,6 @@
     "notAvailable": "Video-effecten zijn binnenkort beschikbaar in uw browser. We werken eraan! In de tussentijd kunt u Google Chrome gebruiken voor de beste prestaties of Firefox :(",
     "heading": "Vervaging",
     "clear": "Effect uitschakelen",
-    "advanced": {
-      "title": "Geavanceerde instellingen",
-      "model": {
-        "title": "Segmentatiemodel",
-        "auto": "Geoptimaliseerd (automatisch)",
-        "landscape": "Landscape (snel)",
-        "multiclass": "Multiclass (kwaliteit)",
-        "rvm": "RVM (recurrent, hogere kwaliteit)"
-      },
-      "rvmDownsample": {
-        "manual": "Handmatige downsample-ratio",
-        "label": "Downsample-ratio (RVM)"
-      },
-      "preProcessing": {
-        "title": "Voorbewerking",
-        "roiCropping": "Persoonsuitsnede (ROI)"
-      },
-      "postProcessing": {
-        "title": "Nabewerking",
-        "sigmoid": "Sigmoid",
-        "erosion": "Randerosie",
-        "ema": "EMA"
-      },
-      "upsampling": {
-        "title": "Opschaling",
-        "guidedFilter": "Guided Filter (GPU)"
-      },
-      "params": {
-        "sigmoidSteepness": "Sigmoid steilheid",
-        "sigmoidThreshold": "Sigmoid drempel",
-        "erosionPixels": "Verwijderde pixels (randen)",
-        "emaAlpha": "Reactiviteit (EMA)",
-        "blurRadius": "Vervaging-intensiteit",
-        "upsamplingRadius": "Straal (Guided Filter)",
-        "upsamplingEps": "Regularisatie (Guided Filter)"
-      },
-      "apply": "Toepassen"
-    },
     "blur": {
       "title": "Achtergrondvervaging",
       "status": {

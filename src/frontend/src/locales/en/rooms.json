@@ -254,44 +254,6 @@
     "notAvailable": "Video effects will be available soon on your browser. We're working on it! In the meantime, you can use Google Chrome for best performance or Firefox :(",
     "heading": "Blur",
     "clear": "Disable effect",
-    "advanced": {
-      "title": "Advanced settings",
-      "model": {
-        "title": "Segmentation model",
-        "auto": "Optimized (automatic)",
-        "landscape": "Landscape (fast)",
-        "multiclass": "Multiclass (quality)",
-        "rvm": "RVM (recurrent, higher quality)"
-      },
-      "rvmDownsample": {
-        "manual": "Manual downsample ratio",
-        "label": "Downsample ratio (RVM)"
-      },
-      "preProcessing": {
-        "title": "Pre-processing",
-        "roiCropping": "Person crop (ROI)"
-      },
-      "postProcessing": {
-        "title": "Post-processing",
-        "sigmoid": "Sigmoid",
-        "erosion": "Edge erosion",
-        "ema": "EMA"
-      },
-      "upsampling": {
-        "title": "Upsampling",
-        "guidedFilter": "Guided Filter (GPU)"
-      },
-      "params": {
-        "sigmoidSteepness": "Sigmoid steepness",
-        "sigmoidThreshold": "Sigmoid threshold",
-        "erosionPixels": "Pixels removed (edges)",
-        "emaAlpha": "Responsiveness (EMA)",
-        "blurRadius": "Blur intensity",
-        "upsamplingRadius": "Radius (Guided Filter)",
-        "upsamplingEps": "Regularization (Guided Filter)"
-      },
-      "apply": "Apply"
-    },
     "blur": {
       "title": "Background blur",
       "status": {

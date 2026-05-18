@@ -9,7 +9,7 @@ import { GpuGuidedFilter } from './GpuGuidedFilter'
  * Pipeline per frame (`render(videoElement)`):
  *   videoTex ← upload from <video>
  *   maskTex  ← uploaded once per new mask (uploadMask)
- *   maskRefined ← post-processing chain (sigmoid → morpho → ema)
+ *   maskRefined ← post-processing chain (morpho → ema)
  *   bgBlur ← (mode === 'blur') maskedDownsample(videoTex, mask)
  *                              → maskWeightedGaussH → maskWeightedGaussV  (half-res)
  *           (mode === 'virtual') virtualBgTex
@@ -38,7 +38,6 @@ export class WebGl2Renderer implements GpuRenderer {
 
   // programs
   private pUploadMask!: WebGLProgram
-  private pSigmoid!: WebGLProgram
   private pEma!: WebGLProgram
   private pCopyR!: WebGLProgram
   private pMaskedDownsample!: WebGLProgram
@@ -457,7 +456,6 @@ export class WebGl2Renderer implements GpuRenderer {
     if (this.vao) gl.deleteVertexArray(this.vao)
     const programs = [
       this.pUploadMask,
-      this.pSigmoid,
       this.pEma,
       this.pCopyR,
       this.pMaskedDownsample,
@@ -494,25 +492,6 @@ export class WebGl2Renderer implements GpuRenderer {
     const advance = () => {
       src = dstTex === this.maskA ? this.maskA : this.maskB
       swap()
-    }
-
-    // Sigmoid
-    if (this.postCfg.sigmoid) {
-      gl.bindFramebuffer(gl.FRAMEBUFFER, dstFbo)
-      gl.useProgram(this.pSigmoid)
-      gl.activeTexture(gl.TEXTURE0)
-      gl.bindTexture(gl.TEXTURE_2D, src)
-      gl.uniform1i(gl.getUniformLocation(this.pSigmoid, 'uTex'), 0)
-      gl.uniform1f(
-        gl.getUniformLocation(this.pSigmoid, 'uSteepness'),
-        this.postCfg.sigmoid.steepness
-      )
-      gl.uniform1f(
-        gl.getUniformLocation(this.pSigmoid, 'uThreshold'),
-        this.postCfg.sigmoid.threshold
-      )
-      this._drawQuad()
-      advance()
     }
 
     // Closing (Dilation then Erosion to fill holes)
@@ -684,7 +663,7 @@ export class WebGl2Renderer implements GpuRenderer {
    *
    * Intentionally does NOT include the erosion step from the standard compositor:
    * segmo's transition-zone matting subsumes that need. The user-selectable
-   * postprocess chain (sigmoid/morphology/EMA/guided-upsample) ran upstream and
+   * postprocess chain (morphology/EMA/guided-upsample) ran upstream and
    * is unaffected.
    */
   private _segmoLogged = false
@@ -1091,19 +1070,6 @@ void main() {
   fragColor = texture(uTex, vUv);
 }`
 
-    const FS_SIGMOID = `#version 300 es
-precision mediump float;
-in vec2 vUv;
-uniform sampler2D uTex;
-uniform float uSteepness;
-uniform float uThreshold;
-out vec4 fragColor;
-void main() {
-  float v = texture(uTex, vUv).r;
-  float y = 1.0 / (1.0 + exp(-uSteepness * (v - uThreshold)));
-  fragColor = vec4(y, 0.0, 0.0, 1.0);
-}`
-
     const FS_EMA = `#version 300 es
 precision mediump float;
 in vec2 vUv;
@@ -1209,7 +1175,6 @@ void main() {
 }`
 
     this.pUploadMask = this._link(VS, FS_COPY_R)
-    this.pSigmoid = this._link(VS, FS_SIGMOID)
     this.pEma = this._link(VS, FS_EMA)
     this.pCopyR = this._link(VS, FS_COPY_R)
     this.pMaskedDownsample = this._link(VS, FS_MASKED_DOWNSAMPLE)

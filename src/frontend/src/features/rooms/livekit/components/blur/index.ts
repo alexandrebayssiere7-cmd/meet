@@ -12,13 +12,11 @@ export enum SegmentationModel {
   AUTO = 'auto',
   LANDSCAPE = 'landscape',
   MULTICLASS = 'multiclass',
-  RVM = 'rvm',
 }
 
 export type MorphologyOp = 'erosion' | 'dilation' | 'opening' | 'closing'
 
 export type PostProcessingConfig = {
-  sigmoid?: { steepness: number; threshold: number }
   erosion?: { pixels: number }
   closing?: { radius: number }
   ema?: { alpha: number }
@@ -40,7 +38,6 @@ export type ProcessorConfig =
       blurRadius: number
       model?: SegmentationModel
       preProcessing?: PreProcessingConfig
-      rvmDownsampleRatio?: number
       postProcessing?: PostProcessingConfig
       upsampling?: UpsamplingConfig
     }
@@ -50,7 +47,6 @@ export type ProcessorConfig =
       fileId?: string
       model?: SegmentationModel
       preProcessing?: PreProcessingConfig
-      rvmDownsampleRatio?: number
       postProcessing?: PostProcessingConfig
       upsampling?: UpsamplingConfig
     }

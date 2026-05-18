@@ -10,7 +10,7 @@ import {
 } from '.'
 import { PreProcessingPipeline } from './preprocessing/PreProcessingPipeline'
 import { BBox } from './preprocessing/RoiCropper'
-import { Segmenter, createSegmenter, RVMSegmenter, probeMediapipeDelegate } from './segmenters'
+import { Segmenter, createSegmenter, probeMediapipeDelegate } from './segmenters'
 import { WebGl2Renderer } from './renderers/WebGl2Renderer'
 import { pushMattingError } from './errors/MattingErrorStore'
 
@@ -28,7 +28,6 @@ const DEFAULT_BLUR = 10
  *                     camera's native framerate, composites the latest available
  *                     mask without ever blocking on inference.
  *
- * Decoupling prevents RVM's ~20-50ms inference from introducing render jitter.
  * All blur passes run in GLSL shaders — no ctx.filter (unreliable on Safari).
  */
 export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
@@ -184,8 +183,6 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     const prevConfigured = this._configuredModel
     const newModel = this._getModel(opts)
     this._configuredModel = newModel
-    const prevRvmRatio = this._getRvmRatio(this.options)
-    const nextRvmRatio = this._getRvmRatio(opts)
 
     this._initVirtualBackgroundImage()
 
@@ -195,14 +192,6 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       } else {
         this._initSegmenterBackground(newModel)
       }
-    } else if (
-      newModel === SegmentationModel.RVM &&
-      nextRvmRatio !== prevRvmRatio &&
-      this.segmenter instanceof RVMSegmenter
-    ) {
-      this.segmenter.setDownsampleRatio(
-        nextRvmRatio ?? this._autoRvmRatio()
-      )
     }
     this._applyRendererConfig()
   }
@@ -339,20 +328,6 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     }
   }
 
-  private _getRvmRatio(opts: ProcessorConfig): number | undefined {
-    if (opts.type === ProcessorType.BLUR || opts.type === ProcessorType.VIRTUAL) {
-      return opts.rvmDownsampleRatio
-    }
-    return undefined
-  }
-
-  private _autoRvmRatio(): number {
-    const w = this.sourceSettings?.width ?? 1280
-    if (w > 1920) return 0.125
-    if (w >= 720) return 0.25
-    return 0.5
-  }
-
   private _getPostProcessingConfig(): PostProcessingConfig {
     if (
       this.options.type === ProcessorType.BLUR ||
@@ -412,10 +387,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
         targetModel = SegmentationModel.MULTICLASS
       }
 
-      let seg = createSegmenter(targetModel, {
-        rvmDownsampleRatio:
-          this._getRvmRatio(this.options) ?? this._autoRvmRatio(),
-      })
+      let seg = createSegmenter(targetModel)
       await seg.init()
 
       if (this._pendingModel !== model) {
@@ -464,10 +436,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
         targetModel = SegmentationModel.MULTICLASS
       }
 
-      let seg = createSegmenter(targetModel, {
-        rvmDownsampleRatio:
-          this._getRvmRatio(this.options) ?? this._autoRvmRatio(),
-      })
+      let seg = createSegmenter(targetModel)
       await seg.init()
 
       if (this._pendingModel !== model) {

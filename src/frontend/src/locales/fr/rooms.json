@@ -254,44 +254,6 @@
     "notAvailable": "Les effets vidéo seront bientôt disponibles sur votre navigateur. Nous y travaillons ! En attendant, vous pouvez utiliser Google Chrome pour de meilleures performances ou Firefox :(",
     "heading": "Flou",
     "clear": "Désactiver l'effet",
-    "advanced": {
-      "title": "Paramètres avancés",
-      "model": {
-        "title": "Modèle de segmentation",
-        "auto": "Optimisé (automatique)",
-        "landscape": "Landscape (rapide)",
-        "multiclass": "Multiclass (qualité)",
-        "rvm": "RVM (récurrent, qualité supérieure)"
-      },
-      "rvmDownsample": {
-        "manual": "Downsample ratio manuel",
-        "label": "Downsample ratio (RVM)"
-      },
-      "preProcessing": {
-        "title": "Pré-traitement",
-        "roiCropping": "Recadrage sur la personne (ROI)"
-      },
-      "postProcessing": {
-        "title": "Post-traitement",
-        "sigmoid": "Sigmoid",
-        "erosion": "Érosion des bords",
-        "ema": "EMA"
-      },
-      "upsampling": {
-        "title": "Suréchantillonnage",
-        "guidedFilter": "Guided Filter (GPU)"
-      },
-      "params": {
-        "sigmoidSteepness": "Pente sigmoid",
-        "sigmoidThreshold": "Seuil sigmoid",
-        "erosionPixels": "Pixels supprimés (bords)",
-        "emaAlpha": "Réactivité (EMA)",
-        "blurRadius": "Intensité du flou",
-        "upsamplingRadius": "Rayon (Guided Filter)",
-        "upsamplingEps": "Régularisation (Guided Filter)"
-      },
-      "apply": "Appliquer"
-    },
     "blur": {
       "title": "Flou d'arrière-plan",
       "status": {
