@@ -4,9 +4,28 @@ import { useTranslation } from 'react-i18next'
 import {
   BackgroundProcessorFactory,
   BackgroundProcessorInterface,
+  PostProcessingConfig,
+  PreProcessingConfig,
+  UpsamplingConfig,
   ProcessorConfig,
   ProcessorType,
+  SegmentationModel,
 } from '../blur'
+
+const PRODUCTION_MODEL: SegmentationModel = SegmentationModel.AUTO
+const PRODUCTION_PRE_PROCESSING: PreProcessingConfig = {
+  roiCropping: { enabled: true },
+}
+const PRODUCTION_POST_PROCESSING: PostProcessingConfig = {
+  erosion: { pixels: 3 },
+  ema: { alpha: 0.7 },
+  closing: { radius: 3 },
+}
+const PRODUCTION_UPSAMPLING: UpsamplingConfig = {
+  method: 'guided',
+  radius: 8,
+  eps: 1.0e-2,
+}
 import { css } from '@/styled-system/css'
 import { Button, Dialog, H, P, Text, ToggleButton } from '@/primitives'
 import { VisualOnlyTooltip } from '@/primitives/VisualOnlyTooltip'
@@ -33,6 +52,7 @@ import { useConfig } from '@/api/useConfig.ts'
 import { usePersistentUserChoices } from '@/features/rooms/livekit/hooks/usePersistentUserChoices.ts'
 import { proxy, useSnapshot } from 'valtio'
 import { Spinner } from '@/primitives/Spinner.tsx'
+import { useMattingErrors } from '../blur/errors/MattingErrorStore'
 
 enum BlurRadius {
   NONE = 0,
@@ -119,6 +139,25 @@ export const EffectsConfiguration = ({
     userChoices: { processorConfig },
   } = usePersistentUserChoices()
 
+  const withAdvanced = useCallback(
+    (config: ProcessorConfig): ProcessorConfig => {
+      if (
+        config.type === ProcessorType.BLUR ||
+        config.type === ProcessorType.VIRTUAL
+      ) {
+        return {
+          ...config,
+          model: PRODUCTION_MODEL,
+          preProcessing: PRODUCTION_PRE_PROCESSING,
+          postProcessing: PRODUCTION_POST_PROCESSING,
+          upsampling: PRODUCTION_UPSAMPLING,
+        }
+      }
+      return config
+    },
+    []
+  )
+
   const selectedId = useMemo(
     () =>
       processorConfig ? deriveIdFromProcessorConfig(processorConfig) : 'none',
@@ -126,6 +165,7 @@ export const EffectsConfiguration = ({
   )
 
   const uploadNotPossibleSnap = useSnapshot(uploadNotPossibleLocalState)
+  const mattingErrors = useMattingErrors()
 
   const announceEffectStatusMessage = useCallback(
     (message: string) => {
@@ -186,7 +226,8 @@ export const EffectsConfiguration = ({
   )
 
   const toggleEffect = useCallback(
-    async (config: ProcessorConfig) => {
+    async (rawConfig: ProcessorConfig) => {
+      const config = withAdvanced(rawConfig)
       setProcessorPending(true)
       const wasSelectedBeforeToggle =
         selectedId === deriveIdFromProcessorConfig(config)
@@ -254,6 +295,7 @@ export const EffectsConfiguration = ({
       toggle,
       updateEffectStatusMessage,
       videoTrack,
+      withAdvanced,
     ]
   )
 
@@ -621,6 +663,13 @@ export const EffectsConfiguration = ({
         )}
         {isSupported ? (
           <div>
+            {mattingErrors.filter(e => e.level === 'error').map(e => (
+              <Information key={e.code} style={{ marginBottom: '1rem' }}>
+                <Text variant="bodyXsMedium">
+                  {t(`matting.errors.${e.code}`, { defaultValue: e.detail ?? e.code })}
+                </Text>
+              </Information>
+            ))}
             <div>
               <H
                 lvl={2}
@@ -903,6 +952,7 @@ export const EffectsConfiguration = ({
                   ))}
                 </div>
               </div>
+
             </div>
           </div>
         ) : (
