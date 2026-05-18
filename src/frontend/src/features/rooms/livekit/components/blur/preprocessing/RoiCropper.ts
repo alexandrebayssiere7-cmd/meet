@@ -126,9 +126,14 @@ function resizeFloat32(
 export class RoiCropper {
   private currentBbox: BBox = { ...FULL_FRAME }
   private hasMask = false
+  private frameCounter = 0
 
   /** Returns the stabilised bbox to use when extracting the model input for this frame. */
   getNextCropBbox(): BBox {
+    this.frameCounter++
+    if (this.frameCounter % 45 === 0) {
+      return { ...FULL_FRAME }
+    }
     return this.currentBbox
   }
 
@@ -183,6 +188,7 @@ export class RoiCropper {
   reset(): void {
     this.currentBbox = { ...FULL_FRAME }
     this.hasMask = false
+    this.frameCounter = 0
   }
 
   getCurrentBbox(): BBox {
