@@ -11,6 +11,7 @@ export type MattingErrorCode =
   | 'GUIDED_FILTER_INIT_FAILED'
   | 'POSTPROCESS_SHADER_COMPILE_FAILED'
   | 'VIRTUAL_BG_LOAD_FAILED'
+  | 'FACELANDMARKER_INIT_FAILED'
 
 export type MattingErrorLevel = 'info' | 'warn' | 'error'
 

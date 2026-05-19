@@ -313,7 +313,23 @@
         "WEBGL2_INIT_FAILED": "WebGL2 is not available in this browser. The video effect cannot be applied.",
         "CAPTURESTREAM_UNSUPPORTED": "This browser does not support the video capture required for processing.",
         "VIRTUAL_BG_LOAD_FAILED": "The background image could not be loaded.",
-        "POSTPROCESS_SHADER_COMPILE_FAILED": "A GPU error is preventing the effect from working."
+        "POSTPROCESS_SHADER_COMPILE_FAILED": "A GPU error is preventing the effect from working.",
+        "FACELANDMARKER_INIT_FAILED": "The makeup model could not be loaded. Makeup filters are disabled."
+      }
+    },
+    "makeup": {
+      "title": "Makeup",
+      "none": {
+        "apply": "Turn makeup off",
+        "clear": "No makeup applied",
+        "short": "None"
+      },
+      "presets": {
+        "natural": { "label": "Natural" },
+        "glamour": { "label": "Glamour" },
+        "boldLips": { "label": "Bold lips" },
+        "smokyEyes": { "label": "Smoky" },
+        "softGlow": { "label": "Soft glow" }
       }
     },
     "faceLandmarks": {

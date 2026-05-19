@@ -4,6 +4,7 @@ import {
   ProcessorType,
   SegmentationModel,
 } from '@/features/rooms/livekit/components/blur'
+import { isKnownMakeupPresetId } from '@/features/rooms/livekit/components/blur/makeup/presets'
 import {
   loadUserChoices,
   LocalUserChoices as LocalUserChoicesLK,
@@ -45,6 +46,11 @@ if (cfg && (cfg.type === ProcessorType.BLUR || cfg.type === ProcessorType.VIRTUA
     !Object.values(SegmentationModel).includes(cfg.model)
   ) {
     cfg.model = SegmentationModel.AUTO
+  }
+  // Drop unknown makeup preset ids — guards against rolling back a preset list
+  // or upgrading a stored config from a previous version.
+  if (cfg.makeupPresetId !== undefined && !isKnownMakeupPresetId(cfg.makeupPresetId)) {
+    cfg.makeupPresetId = undefined
   }
 }
 

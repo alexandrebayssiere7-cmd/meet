@@ -53,6 +53,7 @@ import { usePersistentUserChoices } from '@/features/rooms/livekit/hooks/usePers
 import { proxy, useSnapshot } from 'valtio'
 import { Spinner } from '@/primitives/Spinner.tsx'
 import { useMattingErrors } from '../blur/errors/MattingErrorStore'
+import { MAKEUP_PRESETS } from '../blur/makeup/presets'
 
 enum BlurRadius {
   NONE = 0,
@@ -139,6 +140,16 @@ export const EffectsConfiguration = ({
     userChoices: { processorConfig },
   } = usePersistentUserChoices()
 
+  // Carry the current makeup selection forward when the user changes the
+  // base effect (blur/virtual). Makeup is orthogonal to the background and
+  // should not get lost on a blur toggle.
+  const currentMakeupId =
+    processorConfig &&
+    (processorConfig.type === ProcessorType.BLUR ||
+      processorConfig.type === ProcessorType.VIRTUAL)
+      ? processorConfig.makeupPresetId
+      : undefined
+
   const withAdvanced = useCallback(
     (config: ProcessorConfig): ProcessorConfig => {
       if (
@@ -151,11 +162,12 @@ export const EffectsConfiguration = ({
           preProcessing: PRODUCTION_PRE_PROCESSING,
           postProcessing: PRODUCTION_POST_PROCESSING,
           upsampling: PRODUCTION_UPSAMPLING,
+          makeupPresetId: config.makeupPresetId ?? currentMakeupId,
         }
       }
       return config
     },
-    []
+    [currentMakeupId]
   )
 
   const selectedId = useMemo(
@@ -163,6 +175,17 @@ export const EffectsConfiguration = ({
       processorConfig ? deriveIdFromProcessorConfig(processorConfig) : 'none',
     [processorConfig]
   )
+
+  const selectedMakeupId = useMemo<string | null>(() => {
+    if (!processorConfig) return null
+    if (
+      processorConfig.type === ProcessorType.BLUR ||
+      processorConfig.type === ProcessorType.VIRTUAL
+    ) {
+      return processorConfig.makeupPresetId ?? null
+    }
+    return null
+  }, [processorConfig])
 
   const uploadNotPossibleSnap = useSnapshot(uploadNotPossibleLocalState)
   const mattingErrors = useMattingErrors()
@@ -294,6 +317,80 @@ export const EffectsConfiguration = ({
       selectedId,
       toggle,
       updateEffectStatusMessage,
+      videoTrack,
+      withAdvanced,
+    ]
+  )
+
+  const toggleMakeup = useCallback(
+    async (presetId: string | null) => {
+      const nextPresetId = presetId ?? undefined
+      // Pick the base config: keep the currently active blur/virtual if any,
+      // otherwise fall back to a passthrough blur (radius 0) so the matting
+      // pipeline still runs and the face landmarker can produce its output.
+      let baseConfig: ProcessorConfig
+      if (
+        processorConfig &&
+        (processorConfig.type === ProcessorType.BLUR ||
+          processorConfig.type === ProcessorType.VIRTUAL)
+      ) {
+        baseConfig = { ...processorConfig, makeupPresetId: nextPresetId }
+      } else {
+        baseConfig = {
+          type: ProcessorType.BLUR,
+          blurRadius: 0,
+          makeupPresetId: nextPresetId,
+        }
+      }
+      const newConfig = withAdvanced(baseConfig)
+
+      setProcessorPending(true)
+
+      if (!videoTrack) {
+        const newProcessor = BackgroundProcessorFactory.getProcessor(newConfig)!
+        await toggle(true, { processor: newProcessor })
+        saveProcessorConfig(newConfig)
+        setTimeout(() => setProcessorPending(false))
+        return
+      }
+
+      if (!enabled) {
+        await toggle(true)
+      }
+
+      const processor =
+        videoTrack?.getProcessor() as BackgroundProcessorInterface
+      try {
+        if (
+          !processor ||
+          (processor.options.type !== newConfig.type &&
+            !BackgroundProcessorFactory.hasModernApiSupport())
+        ) {
+          const newProcessor =
+            BackgroundProcessorFactory.getProcessor(newConfig)!
+          if (!BackgroundProcessorFactory.hasModernApiSupport()) {
+            await videoTrack.stopProcessor()
+          }
+          await videoTrack.setProcessor(newProcessor)
+        } else if (processor.options.type !== newConfig.type) {
+          const newProcessor =
+            BackgroundProcessorFactory.getProcessor(newConfig)!
+          await videoTrack.setProcessor(newProcessor)
+        } else {
+          await processor.update(newConfig)
+        }
+        saveProcessorConfig(newConfig)
+      } catch (error) {
+        console.error('Error applying makeup:', error)
+      } finally {
+        setTimeout(() => setProcessorPending(false))
+      }
+    },
+    [
+      enabled,
+      processorConfig,
+      saveProcessorConfig,
+      toggle,
       videoTrack,
       withAdvanced,
     ]
@@ -950,6 +1047,71 @@ export const EffectsConfiguration = ({
                       />
                     </VisualOnlyTooltip>
                   ))}
+                </div>
+              </div>
+
+              <div className={css({ marginTop: '1.5rem' })}>
+                <H
+                  lvl={2}
+                  style={{
+                    marginBottom: '0.6rem',
+                  }}
+                  variant="bodyXsBold"
+                >
+                  {t('makeup.title')}
+                </H>
+                <div
+                  className={css({
+                    display: 'flex',
+                    gap: '1.25rem',
+                    paddingBottom: '0.5rem',
+                    flexWrap: 'wrap',
+                  })}
+                >
+                  <VisualOnlyTooltip
+                    tooltip={t(
+                      `makeup.none.${selectedMakeupId === null ? 'clear' : 'apply'}`
+                    )}
+                  >
+                    <ToggleButton
+                      variant="bigSquare"
+                      aria-label={t(
+                        `makeup.none.${selectedMakeupId === null ? 'clear' : 'apply'}`
+                      )}
+                      isDisabled={processorOptions.isDisabled}
+                      onChange={() => toggleMakeup(null)}
+                      isSelected={selectedMakeupId === null}
+                      data-attr="toggle-makeup-none"
+                    >
+                      <span
+                        className={css({
+                          fontSize: '0.75rem',
+                          fontWeight: 'bold',
+                        })}
+                      >
+                        {t('makeup.none.short')}
+                      </span>
+                    </ToggleButton>
+                  </VisualOnlyTooltip>
+                  {MAKEUP_PRESETS.map((preset) => {
+                    const isSelected = selectedMakeupId === preset.id
+                    const label = t(`makeup.presets.${preset.labelKey}.label`)
+                    return (
+                      <VisualOnlyTooltip key={preset.id} tooltip={label}>
+                        <ToggleButton
+                          variant="bigSquare"
+                          aria-label={label}
+                          isDisabled={processorOptions.isDisabled}
+                          onChange={() => toggleMakeup(preset.id)}
+                          isSelected={isSelected}
+                          style={{
+                            backgroundColor: preset.swatchColor,
+                          }}
+                          data-attr={`toggle-makeup-${preset.id}`}
+                        />
+                      </VisualOnlyTooltip>
+                    )
+                  })}
                 </div>
               </div>
 

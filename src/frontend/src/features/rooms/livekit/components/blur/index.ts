@@ -40,6 +40,7 @@ export type ProcessorConfig =
       preProcessing?: PreProcessingConfig
       postProcessing?: PostProcessingConfig
       upsampling?: UpsamplingConfig
+      makeupPresetId?: string
     }
   | {
       type: ProcessorType.VIRTUAL
@@ -49,6 +50,7 @@ export type ProcessorConfig =
       preProcessing?: PreProcessingConfig
       postProcessing?: PostProcessingConfig
       upsampling?: UpsamplingConfig
+      makeupPresetId?: string
     }
   | ({ type: ProcessorType.FACE_LANDMARKS } & FaceLandmarksOptions)
 

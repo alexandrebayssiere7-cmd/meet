@@ -94,6 +94,31 @@ export class WebGl2Renderer implements GpuRenderer {
   private fboBgBlurPing!: WebGLFramebuffer
   private fboBgBlurPong!: WebGLFramebuffer
 
+  // Makeup overlay (GPU path).
+  //
+  // When a preset is active the composite shader writes to `compositeTex`
+  // instead of the canvas, and a final makeup pass reads (composite +
+  // landmarks + preset params) and writes the final image to the canvas.
+  // When no preset is active the composite renders to the canvas as before
+  // (zero overhead path).
+  private pMakeupGl: WebGLProgram | null = null
+  private compositeTex: WebGLTexture | null = null
+  private fboComposite: WebGLFramebuffer | null = null
+  private landmarksTex: WebGLTexture | null = null
+  private _makeupActive = false
+  private _makeupHasFace = false
+  private _makeupPreset: {
+    lipColor: [number, number, number]; lipAlpha: number
+    blushColor: [number, number, number]; blushAlpha: number; blushRadius: number
+    browColor: [number, number, number]; browAlpha: number
+    lashColor: [number, number, number]; lashAlpha: number; lashThicknessPx: number
+  } = {
+    lipColor: [0, 0, 0], lipAlpha: 0,
+    blushColor: [0, 0, 0], blushAlpha: 0, blushRadius: 0,
+    browColor: [0, 0, 0], browAlpha: 0,
+    lashColor: [0, 0, 0], lashAlpha: 0, lashThicknessPx: 0,
+  }
+
   private halfW = 0
   private halfH = 0
   private hasEmaState = false
@@ -245,13 +270,24 @@ export class WebGl2Renderer implements GpuRenderer {
       this.fboTintedVideo = null
     }
 
-    // 4. Destroy Guided Filter so it gets recreated at the new size
+    // 4. Clear the makeup composite target so it gets recreated at the new
+    //    size on the next frame that needs it.
+    if (this.compositeTex) {
+      gl.deleteTexture(this.compositeTex)
+      this.compositeTex = null
+    }
+    if (this.fboComposite) {
+      gl.deleteFramebuffer(this.fboComposite)
+      this.fboComposite = null
+    }
+
+    // 5. Destroy Guided Filter so it gets recreated at the new size
     if (this.gf) {
       this.gf.destroy()
       this.gf = null
     }
 
-    // 5. Update canvas dimensions
+    // 6. Update canvas dimensions
     const canvas = gl.canvas as HTMLCanvasElement
     if (canvas) {
       canvas.width = w
@@ -300,6 +336,75 @@ export class WebGl2Renderer implements GpuRenderer {
 
   setMode(mode: 'blur' | 'virtual') {
     this.mode = mode
+  }
+
+  setMakeupActive(active: boolean) {
+    this._makeupActive = active
+  }
+
+  /**
+   * Configure the per-zone colors/alphas for the makeup shader. Called when
+   * the user picks a preset — zero-alpha zones disable their respective
+   * shader branches.
+   */
+  setMakeupPreset(p: {
+    lipColor: [number, number, number]; lipAlpha: number
+    blushColor: [number, number, number]; blushAlpha: number; blushRadius: number
+    browColor: [number, number, number]; browAlpha: number
+    lashColor: [number, number, number]; lashAlpha: number; lashThicknessPx: number
+  }) {
+    this._makeupPreset = p
+  }
+
+  /**
+   * Upload the packed landmark buffer (NUM_ZONES rows of MAX_PER_ZONE (x,y)
+   * pairs) into a small RG32F sampler texture. `hasFace` is false when no
+   * face was detected this frame — the shader then leaves the image
+   * untouched without us having to clear anything.
+   */
+  uploadLandmarks(packed: Float32Array, width: number, height: number, hasFace: boolean) {
+    const gl = this.gl
+    if (!gl) return
+    this._makeupHasFace = hasFace
+    if (!hasFace) return
+    if (!this.landmarksTex) {
+      this.landmarksTex = gl.createTexture()!
+      gl.bindTexture(gl.TEXTURE_2D, this.landmarksTex)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+      // FLIP_Y is global and on by default — for a raw float texture the
+      // ordering must match what we wrote, so disable it for this upload.
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false)
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RG32F,
+        width,
+        height,
+        0,
+        gl.RG,
+        gl.FLOAT,
+        packed
+      )
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true)
+      return
+    }
+    gl.bindTexture(gl.TEXTURE_2D, this.landmarksTex)
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false)
+    gl.texSubImage2D(
+      gl.TEXTURE_2D,
+      0,
+      0,
+      0,
+      width,
+      height,
+      gl.RG,
+      gl.FLOAT,
+      packed
+    )
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true)
   }
 
   setPostProcessing(cfg: PostProcessingConfig) {
@@ -357,12 +462,20 @@ export class WebGl2Renderer implements GpuRenderer {
       bgTex === this.virtualBgTex
     ) {
       this._compositeVirtualSegmo(bgTex, finalMaskTex)
+      if (this._makeupActive && this.compositeTex) this._drawMakeupGl()
       gl.flush()
       return
     }
 
-    // 5. Composite to the canvas.
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    // 5. Composite — straight to the canvas, unless makeup is active in which
+    //    case we render into fboComposite first so the makeup shader can
+    //    sample the result.
+    const routeToFbo = this._routeCompositeToFbo()
+    if (routeToFbo) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboComposite)
+    } else {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    }
     gl.viewport(0, 0, this.outW, this.outH)
     gl.useProgram(this.pComposite)
     gl.activeTexture(gl.TEXTURE0)
@@ -385,7 +498,88 @@ export class WebGl2Renderer implements GpuRenderer {
     )
     this._drawQuad()
 
+    if (routeToFbo) this._drawMakeupGl()
+
     gl.flush()
+  }
+
+  // Allocate (or re-allocate after a resize) the composite FBO we redirect
+  // the standard compositor to when makeup is active. Lazy: zero cost when
+  // makeup is never used.
+  private _ensureCompositeTarget(): boolean {
+    const gl = this.gl
+    if (this.compositeTex && this.fboComposite) return true
+    const t = gl.createTexture()!
+    gl.bindTexture(gl.TEXTURE_2D, t)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, this.outW, this.outH, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    const f = gl.createFramebuffer()!
+    gl.bindFramebuffer(gl.FRAMEBUFFER, f)
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0)
+    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+      gl.deleteTexture(t)
+      gl.deleteFramebuffer(f)
+      return false
+    }
+    this.compositeTex = t
+    this.fboComposite = f
+    return true
+  }
+
+  // True iff the next composite should be redirected to fboComposite (so the
+  // makeup pass can sample it). False ⇒ render straight to canvas (zero-cost
+  // path when makeup is off, or off because the GPU resources couldn't be
+  // allocated).
+  private _routeCompositeToFbo(): boolean {
+    return this._makeupActive && this._ensureCompositeTarget()
+  }
+
+  private _drawMakeupGl() {
+    if (!this._makeupActive || !this.pMakeupGl || !this.compositeTex || !this.landmarksTex) return
+    const gl = this.gl
+    const p = this.pMakeupGl
+    const mp = this._makeupPreset
+
+    // Reference values from MakeupOverlay.ts. Kept in JS-side constants only
+    // to set the per-zone vertex-count uniforms.
+    const N_LIP_OUTER = 20
+    const N_LIP_INNER = 20
+    const N_BROW_LEFT = 10
+    const N_BROW_RIGHT = 10
+    const N_LASH_LEFT = 8
+    const N_LASH_RIGHT = 8
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    gl.viewport(0, 0, this.outW, this.outH)
+    gl.useProgram(p)
+    gl.activeTexture(gl.TEXTURE0)
+    gl.bindTexture(gl.TEXTURE_2D, this.compositeTex)
+    gl.uniform1i(gl.getUniformLocation(p, 'uComposite'), 0)
+    gl.activeTexture(gl.TEXTURE1)
+    gl.bindTexture(gl.TEXTURE_2D, this.landmarksTex)
+    gl.uniform1i(gl.getUniformLocation(p, 'uLandmarks'), 1)
+    gl.uniform1i(gl.getUniformLocation(p, 'uHasFace'), this._makeupHasFace ? 1 : 0)
+    gl.uniform2f(gl.getUniformLocation(p, 'uOutSize'), this.outW, this.outH)
+    gl.uniform1i(gl.getUniformLocation(p, 'uNumLipOuter'),  N_LIP_OUTER)
+    gl.uniform1i(gl.getUniformLocation(p, 'uNumLipInner'),  N_LIP_INNER)
+    gl.uniform1i(gl.getUniformLocation(p, 'uNumBrowLeft'),  N_BROW_LEFT)
+    gl.uniform1i(gl.getUniformLocation(p, 'uNumBrowRight'), N_BROW_RIGHT)
+    gl.uniform1i(gl.getUniformLocation(p, 'uNumLashLeft'),  N_LASH_LEFT)
+    gl.uniform1i(gl.getUniformLocation(p, 'uNumLashRight'), N_LASH_RIGHT)
+    gl.uniform3fv(gl.getUniformLocation(p, 'uLipColor'),   mp.lipColor)
+    gl.uniform1f (gl.getUniformLocation(p, 'uLipAlpha'),   mp.lipAlpha)
+    gl.uniform3fv(gl.getUniformLocation(p, 'uBlushColor'), mp.blushColor)
+    gl.uniform1f (gl.getUniformLocation(p, 'uBlushAlpha'), mp.blushAlpha)
+    gl.uniform1f (gl.getUniformLocation(p, 'uBlushRadius'), mp.blushRadius)
+    gl.uniform3fv(gl.getUniformLocation(p, 'uBrowColor'),  mp.browColor)
+    gl.uniform1f (gl.getUniformLocation(p, 'uBrowAlpha'),  mp.browAlpha)
+    gl.uniform3fv(gl.getUniformLocation(p, 'uLashColor'),  mp.lashColor)
+    gl.uniform1f (gl.getUniformLocation(p, 'uLashAlpha'),  mp.lashAlpha)
+    gl.uniform1f (gl.getUniformLocation(p, 'uLashThicknessPx'), mp.lashThicknessPx)
+    this._drawQuad()
   }
 
   readPixels(x: number, y: number, w: number, h: number): Uint8Array {
@@ -437,6 +631,8 @@ export class WebGl2Renderer implements GpuRenderer {
       this.segmoCompositeTex,
       this.maskedFgTex,
       this.tintedVideoTex,
+      this.compositeTex,
+      this.landmarksTex,
     ]
     for (const t of tex) if (t) gl.deleteTexture(t)
     const fbo = [
@@ -450,6 +646,7 @@ export class WebGl2Renderer implements GpuRenderer {
       this.fboSegmoComposite,
       this.fboMaskedFg,
       this.fboTintedVideo,
+      this.fboComposite,
     ]
     for (const f of fbo) if (f) gl.deleteFramebuffer(f)
     if (this.quadBuffer) gl.deleteBuffer(this.quadBuffer)
@@ -467,6 +664,7 @@ export class WebGl2Renderer implements GpuRenderer {
       this.pLightWrap,
       this.pMaskedFg,
       this.pFgColorCast,
+      this.pMakeupGl,
     ]
     for (const p of programs) if (p) gl.deleteProgram(p)
   }
@@ -860,11 +1058,15 @@ export class WebGl2Renderer implements GpuRenderer {
     }
 
     // Pass B: segmo composite, fed by the feathered mask. When light wrap is
-    // enabled we render to an intermediate texture; otherwise straight to canvas.
+    // enabled we render to an intermediate texture; otherwise straight to the
+    // final target (canvas or fboComposite if makeup is on).
     const useLightWrap = this.segmoLightWrapStrength > 0.0
+    const finalRouteToFbo = this._routeCompositeToFbo()
     if (useLightWrap) {
       this._ensureSegmoCompositeTarget()
       gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboSegmoComposite)
+    } else if (finalRouteToFbo) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboComposite)
     } else {
       gl.bindFramebuffer(gl.FRAMEBUFFER, null)
     }
@@ -893,8 +1095,13 @@ export class WebGl2Renderer implements GpuRenderer {
     if (!useLightWrap) return
 
     // Pass C: light wrap — mix a small amount of the background color into the
-    // narrow edge band so the subject looks lit by the virtual scene.
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    // narrow edge band so the subject looks lit by the virtual scene. Target
+    // is fboComposite when makeup is on, otherwise the canvas directly.
+    if (finalRouteToFbo) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboComposite)
+    } else {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    }
     gl.viewport(0, 0, this.outW, this.outH)
     gl.useProgram(this.pLightWrap)
     gl.activeTexture(gl.TEXTURE0)
@@ -1211,6 +1418,146 @@ void main() {
 }`
     this.pMorphology = this._link(VS, FS_MORPHOLOGY)
     this.pComposite = this._link(VS, FS_COMPOSITE)
+
+    // Makeup pass: reads the already-composed image from `uComposite`,
+    // evaluates per-pixel polygon / polyline tests against the packed
+    // landmark texture, and writes the final image to the canvas.
+    //
+    // Zone layout matches MakeupOverlay.ts. Per-pixel cost is bounded by
+    // MAX_PER_ZONE iterations per zone — about ~120 ops per pixel in the
+    // worst-case preset. Branches on per-zone alpha are uniform-controlled
+    // (same across the whole frame) so they cost nothing on a GPU warp.
+    const FS_MAKEUP_GL = `#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform sampler2D uComposite;
+uniform sampler2D uLandmarks; // RG32F, MAX_PER_ZONE × NUM_ZONES
+uniform bool uHasFace;
+uniform vec2 uOutSize;        // (outW, outH) in pixels
+
+uniform int uNumLipOuter;
+uniform int uNumLipInner;
+uniform int uNumBrowLeft;
+uniform int uNumBrowRight;
+uniform int uNumLashLeft;
+uniform int uNumLashRight;
+
+uniform vec3 uLipColor;     uniform float uLipAlpha;
+uniform vec3 uBlushColor;   uniform float uBlushAlpha;  uniform float uBlushRadius;
+uniform vec3 uBrowColor;    uniform float uBrowAlpha;
+uniform vec3 uLashColor;    uniform float uLashAlpha;   uniform float uLashThicknessPx;
+
+const int ZONE_LIP_OUTER  = 0;
+const int ZONE_LIP_INNER  = 1;
+const int ZONE_BROW_LEFT  = 2;
+const int ZONE_BROW_RIGHT = 3;
+const int ZONE_LASH_LEFT  = 4;
+const int ZONE_LASH_RIGHT = 5;
+const int ZONE_BLUSH      = 6;
+const int MAX_PER_ZONE    = 20;
+
+out vec4 fragColor;
+
+vec2 fetchLmPx(int zone, int idx) {
+  // Landmarks are normalized in image space (top-left origin). Convert to
+  // pixel coordinates so distances are isotropic regardless of aspect ratio.
+  vec2 lm = texelFetch(uLandmarks, ivec2(idx, zone), 0).xy;
+  return lm * uOutSize;
+}
+
+float distToSegmentSq(vec2 p, vec2 a, vec2 b) {
+  vec2 pa = p - a;
+  vec2 ba = b - a;
+  float denom = max(dot(ba, ba), 1e-6);
+  float h = clamp(dot(pa, ba) / denom, 0.0, 1.0);
+  vec2 d = pa - ba * h;
+  return dot(d, d);
+}
+
+// Even-odd point-in-polygon with anti-aliased edge. Returns a soft mask in
+// [0,1]. The polygon vertices live in row \`zone\`, indices 0..n-1.
+float polygonMask(vec2 p, int zone, int n) {
+  bool inside = false;
+  float minDistSq = 1e18;
+  vec2 prev = fetchLmPx(zone, n - 1);
+  for (int i = 0; i < MAX_PER_ZONE; i++) {
+    if (i >= n) break;
+    vec2 cur = fetchLmPx(zone, i);
+    // Even-odd ray casting (horizontal ray to +x). When the edge straddles
+    // p.y, prev.y - cur.y is guaranteed non-zero — direct division is safe
+    // and signed correctly (no max() needed, no sign-flipping hack).
+    if ((cur.y > p.y) != (prev.y > p.y)) {
+      float t = (p.y - cur.y) / (prev.y - cur.y);
+      float xCross = cur.x + t * (prev.x - cur.x);
+      if (p.x < xCross) inside = !inside;
+    }
+    minDistSq = min(minDistSq, distToSegmentSq(p, prev, cur));
+    prev = cur;
+  }
+  float dist = sqrt(minDistSq);
+  float signedDist = inside ? dist : -dist;
+  return smoothstep(-1.0, 1.0, signedDist);
+}
+
+// Distance (in pixels) from p to the polyline defined by row \`zone\` of
+// length n. Polyline is open (not closed back to start).
+float polylineDistSq(vec2 p, int zone, int n) {
+  float minD = 1e18;
+  for (int i = 0; i < MAX_PER_ZONE - 1; i++) {
+    if (i >= n - 1) break;
+    vec2 a = fetchLmPx(zone, i);
+    vec2 b = fetchLmPx(zone, i + 1);
+    minD = min(minD, distToSegmentSq(p, a, b));
+  }
+  return minD;
+}
+
+void main() {
+  vec3 base = texture(uComposite, vUv).rgb;
+  if (!uHasFace) { fragColor = vec4(base, 1.0); return; }
+
+  // Composite UV: bottom-left origin (WebGL). Landmark UV: top-left origin.
+  // Flip Y so the two coordinate systems agree.
+  vec2 p = vec2(vUv.x, 1.0 - vUv.y) * uOutSize;
+
+  vec3 result = base;
+
+  if (uBlushAlpha > 0.0) {
+    vec2 bl = fetchLmPx(ZONE_BLUSH, 0);
+    vec2 br = fetchLmPx(ZONE_BLUSH, 1);
+    float dl = length(p - bl);
+    float dr = length(p - br);
+    float r  = uBlushRadius;
+    float blushMask = 1.0 - smoothstep(0.0, r, min(dl, dr));
+    result = mix(result, result * uBlushColor, blushMask * uBlushAlpha);
+  }
+
+  if (uBrowAlpha > 0.0) {
+    float mL = polygonMask(p, ZONE_BROW_LEFT,  uNumBrowLeft);
+    float mR = polygonMask(p, ZONE_BROW_RIGHT, uNumBrowRight);
+    float browMask = max(mL, mR);
+    result = mix(result, result * uBrowColor, browMask * uBrowAlpha);
+  }
+
+  if (uLipAlpha > 0.0) {
+    float outer = polygonMask(p, ZONE_LIP_OUTER, uNumLipOuter);
+    float inner = polygonMask(p, ZONE_LIP_INNER, uNumLipInner);
+    float lipMask = clamp(outer - inner, 0.0, 1.0);
+    result = mix(result, result * uLipColor, lipMask * uLipAlpha);
+  }
+
+  if (uLashAlpha > 0.0) {
+    float dL = sqrt(polylineDistSq(p, ZONE_LASH_LEFT,  uNumLashLeft));
+    float dR = sqrt(polylineDistSq(p, ZONE_LASH_RIGHT, uNumLashRight));
+    float d  = min(dL, dR);
+    float halfThick = uLashThicknessPx * 0.5;
+    float lashMask = 1.0 - smoothstep(halfThick - 1.0, halfThick, d);
+    result = mix(result, uLashColor, lashMask * uLashAlpha);
+  }
+
+  fragColor = vec4(result, 1.0);
+}`
+    this.pMakeupGl = this._link(VS, FS_MAKEUP_GL)
 
     // Segmo-style compositor for virtual backgrounds. Ported from
     // eyalfishler/segmo (src/shaders.ts COMPOSITE_SHADER, MIT).

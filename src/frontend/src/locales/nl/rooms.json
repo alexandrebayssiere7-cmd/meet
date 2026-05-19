@@ -313,7 +313,23 @@
         "WEBGL2_INIT_FAILED": "WebGL2 is niet beschikbaar in deze browser. Het video-effect kan niet worden toegepast.",
         "CAPTURESTREAM_UNSUPPORTED": "Deze browser ondersteunt de vereiste videovastlegging voor verwerking niet.",
         "VIRTUAL_BG_LOAD_FAILED": "De achtergrondafbeelding kon niet worden geladen.",
-        "POSTPROCESS_SHADER_COMPILE_FAILED": "Een GPU-fout verhindert het werken van het effect."
+        "POSTPROCESS_SHADER_COMPILE_FAILED": "Een GPU-fout verhindert het werken van het effect.",
+        "FACELANDMARKER_INIT_FAILED": "Het make-upmodel kon niet worden geladen. Make-upfilters zijn uitgeschakeld."
+      }
+    },
+    "makeup": {
+      "title": "Make-up",
+      "none": {
+        "apply": "Make-up uitschakelen",
+        "clear": "Geen make-up actief",
+        "short": "Geen"
+      },
+      "presets": {
+        "natural": { "label": "Natuurlijk" },
+        "glamour": { "label": "Glamour" },
+        "boldLips": { "label": "Geprononceerde lippen" },
+        "smokyEyes": { "label": "Smoky" },
+        "softGlow": { "label": "Soft glow" }
       }
     },
     "faceLandmarks": {

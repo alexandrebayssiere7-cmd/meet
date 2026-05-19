@@ -13,10 +13,57 @@ import { BBox } from './preprocessing/RoiCropper'
 import { Segmenter, createSegmenter, probeMediapipeDelegate } from './segmenters'
 import { WebGl2Renderer } from './renderers/WebGl2Renderer'
 import { pushMattingError } from './errors/MattingErrorStore'
+import { FaceLandmarkerRunner } from './FaceLandmarkerRunner'
+import {
+  packLandmarksForMakeup,
+  PACKED_TOTAL_FLOATS,
+  MAX_PER_ZONE,
+  NUM_ZONES,
+} from './makeup/MakeupOverlay'
+import { findMakeupPreset, type MakeupPreset } from './makeup/presets'
 
 const SEGMENTATION_MASK_CANVAS_ID = 'background-blur-local-segmentation'
 const BLUR_CANVAS_ID = 'background-blur-local'
 const DEFAULT_BLUR = 10
+
+function hexToRgb01(hex: string): [number, number, number] {
+  // Accept '#rrggbb' and '#rgb'. Falls back to black on unknown input.
+  if (hex.length === 7 && hex[0] === '#') {
+    return [
+      parseInt(hex.slice(1, 3), 16) / 255,
+      parseInt(hex.slice(3, 5), 16) / 255,
+      parseInt(hex.slice(5, 7), 16) / 255,
+    ]
+  }
+  if (hex.length === 4 && hex[0] === '#') {
+    return [
+      parseInt(hex[1] + hex[1], 16) / 255,
+      parseInt(hex[2] + hex[2], 16) / 255,
+      parseInt(hex[3] + hex[3], 16) / 255,
+    ]
+  }
+  return [0, 0, 0]
+}
+
+function presetToShaderUniforms(p: MakeupPreset, outH: number) {
+  const lashRefH = 720
+  return {
+    lipColor: p.lips ? hexToRgb01(p.lips.color) : ([0, 0, 0] as [number, number, number]),
+    lipAlpha: p.lips ? p.lips.alpha : 0,
+    blushColor: p.blush ? hexToRgb01(p.blush.color) : ([0, 0, 0] as [number, number, number]),
+    blushAlpha: p.blush ? p.blush.alpha : 0,
+    // Preset radius is a fraction of the short side of the canvas — convert
+    // to pixels at the current output height for direct use in the shader.
+    blushRadius: p.blush ? p.blush.radius * outH : 0,
+    browColor: p.brows ? hexToRgb01(p.brows.color) : ([0, 0, 0] as [number, number, number]),
+    browAlpha: p.brows ? p.brows.alpha : 0,
+    lashColor: p.lashes ? hexToRgb01(p.lashes.color) : ([0, 0, 0] as [number, number, number]),
+    lashAlpha: p.lashes ? p.lashes.alpha : 0,
+    // Thickness is calibrated for 720p in the preset — rescale linearly to
+    // the current output height so feature sizes stay visually consistent.
+    lashThicknessPx: p.lashes ? Math.max(1, (p.lashes.thickness * outH) / lashRefH) : 0,
+  }
+}
 
 /**
  * Unified background processor using WebGL2 for compositing.
@@ -67,6 +114,13 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
   private _destroyed = false
   private _preProcessingPipeline?: PreProcessingPipeline
   private _lastMask?: Float32Array
+
+  // Makeup overlay (optional, GPU path). The runner is lazily instantiated
+  // the first time a preset is selected and torn down when the user clears
+  // it. The packed buffer is allocated once and reused every frame.
+  private _faceLandmarker?: FaceLandmarkerRunner
+  private _activeMakeupPreset: MakeupPreset | null = null
+  private _landmarksBuf = new Float32Array(PACKED_TOTAL_FLOATS)
 
   constructor(opts: ProcessorConfig) {
     this.name = opts.type === ProcessorType.VIRTUAL ? 'virtual' : 'blur'
@@ -398,6 +452,46 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     const preCfg = this._getPreProcessingConfig()
     this._preProcessingPipeline =
       preCfg?.roiCropping?.enabled ? new PreProcessingPipeline(preCfg) : undefined
+
+    this._syncMakeupConfig()
+  }
+
+  private _getMakeupPresetId(): string | undefined {
+    if (
+      this.options.type === ProcessorType.BLUR ||
+      this.options.type === ProcessorType.VIRTUAL
+    ) {
+      return this.options.makeupPresetId
+    }
+    return undefined
+  }
+
+  private _syncMakeupConfig() {
+    if (!this.gpuRenderer) return
+    const presetId = this._getMakeupPresetId()
+    const preset = findMakeupPreset(presetId)
+    this._activeMakeupPreset = preset
+
+    if (preset) {
+      if (!this._faceLandmarker && this.videoElement) {
+        this._faceLandmarker = new FaceLandmarkerRunner()
+        // start() is async — we don't await here; the render loop will pull
+        // null landmarks until the model is up, which is the same fallback as
+        // a frame with no detected face.
+        void this._faceLandmarker.start(this.videoElement)
+      }
+      // Push the preset's per-zone parameters to the renderer (uniforms).
+      // Zero-alpha zones disable their shader branch automatically.
+      this.gpuRenderer.setMakeupPreset(presetToShaderUniforms(preset, this.gpuRenderer.outH))
+      this.gpuRenderer.setMakeupActive(true)
+    } else {
+      this.gpuRenderer.setMakeupActive(false)
+      // Tear down the runner so we don't keep MediaPipe pinned in memory once
+      // the user has cleared makeup.
+      const runner = this._faceLandmarker
+      this._faceLandmarker = undefined
+      void runner?.stop()
+    }
   }
 
   private async _initSegmenterBackground(model: SegmentationModel) {
@@ -647,6 +741,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     if (vw !== this.gpuRenderer.outW || vh !== this.gpuRenderer.outH) {
       this.gpuRenderer.resizeOutput(vw, vh)
     }
+    this._prepareMakeupFrame()
     const mask = this._latestMask
     if (mask) {
       this.gpuRenderer.uploadMask(mask, this.processingWidth, this.processingHeight)
@@ -654,6 +749,13 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     } else {
       this._drawPassthrough()
     }
+  }
+
+  private _prepareMakeupFrame() {
+    if (!this._activeMakeupPreset || !this.gpuRenderer) return
+    const faces = this._faceLandmarker?.getLatestLandmarks() ?? null
+    const hasFace = packLandmarksForMakeup(faces, this._landmarksBuf)
+    this.gpuRenderer.uploadLandmarks(this._landmarksBuf, MAX_PER_ZONE, NUM_ZONES, hasFace)
   }
 
   // ────────────────────────────────────────────────────────────────────────────
@@ -751,6 +853,10 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     this._preProcessingPipeline = undefined
     this._lastMask = undefined
     this._latestMask = null
+    const runner = this._faceLandmarker
+    this._faceLandmarker = undefined
+    this._activeMakeupPreset = null
+    void runner?.stop()
     this._resolveReady()
 
     if (this.processedTrack && this.processedTrack !== this.source) {
