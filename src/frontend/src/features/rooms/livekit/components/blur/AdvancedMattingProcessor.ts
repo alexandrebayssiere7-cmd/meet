@@ -60,7 +60,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
   private _latestMask: Float32Array | null = null
   private _renderLoopHandle: number | null = null
   private _timerWorker?: Worker
-  private _rejectPendingSleep: ((reason?: any) => void) | null = null
+  private _cancelPendingSleep: (() => void) | null = null
 
   virtualBackgroundImage?: HTMLImageElement
 
@@ -583,8 +583,8 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       }
       const cleanup = () => {
         this._timerWorker?.removeEventListener('message', listener)
-        if (this._rejectPendingSleep === rejectCleanup) {
-          this._rejectPendingSleep = null
+        if (this._cancelPendingSleep === cancelCleanup) {
+          this._cancelPendingSleep = null
         }
       }
       const listener = (response: MessageEvent) => {
@@ -593,11 +593,11 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
           resolve()
         }
       }
-      const rejectCleanup = () => {
+      const cancelCleanup = () => {
         cleanup()
-        reject(new Error('Sleep cancelled due to destruction'))
+        resolve() // Resolve cleanly on destruction to prevent unhandled promise rejection
       }
-      this._rejectPendingSleep = rejectCleanup
+      this._cancelPendingSleep = cancelCleanup
       this._timerWorker.addEventListener('message', listener)
       this._timerWorker.postMessage({ id: SET_TIMEOUT, timeMs: ms })
     })
@@ -614,11 +614,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       const t0 = performance.now()
       const seg = this.segmenter
       if (!seg || !this.videoElement || this.videoElement.videoWidth === 0) {
-        try {
-          await this._sleepWithWorker(TARGET_MS)
-        } catch (e) {
-          break
-        }
+        await this._sleepWithWorker(TARGET_MS)
         continue
       }
       try {
@@ -649,22 +645,14 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
           level: 'warn',
           detail: e instanceof Error ? `${e.name}: ${e.message}` : String(e),
         })
-        try {
-          await this._sleepWithWorker(100)
-        } catch (err) {
-          break
-        }
+        await this._sleepWithWorker(100)
         continue
       }
       // Always yield to the event loop; sleep for whatever is left of 33ms.
       // If inference took longer than one frame period, a 0ms sleep still
       // lets the browser process render callbacks and input before looping.
       const elapsed = performance.now() - t0
-      try {
-        await this._sleepWithWorker(Math.max(0, TARGET_MS - elapsed))
-      } catch (e) {
-        break
-      }
+      await this._sleepWithWorker(Math.max(0, TARGET_MS - elapsed))
     }
   }
 
@@ -798,9 +786,9 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     }
     this.segmenter?.destroy()
     this.segmenter = undefined
-    if (this._rejectPendingSleep) {
-      this._rejectPendingSleep(new Error('Processor destroyed'))
-      this._rejectPendingSleep = null
+    if (this._cancelPendingSleep) {
+      this._cancelPendingSleep()
+      this._cancelPendingSleep = null
     }
     if (this._timerWorker) {
       this._timerWorker.postMessage({ id: CLEAR_TIMEOUT })
