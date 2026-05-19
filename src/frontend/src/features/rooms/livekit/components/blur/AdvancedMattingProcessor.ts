@@ -614,7 +614,11 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       const t0 = performance.now()
       const seg = this.segmenter
       if (!seg || !this.videoElement || this.videoElement.videoWidth === 0) {
-        await this._sleepWithWorker(TARGET_MS)
+        try {
+          await this._sleepWithWorker(TARGET_MS)
+        } catch (e) {
+          break
+        }
         continue
       }
       try {
@@ -645,14 +649,22 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
           level: 'warn',
           detail: e instanceof Error ? `${e.name}: ${e.message}` : String(e),
         })
-        await this._sleepWithWorker(100)
+        try {
+          await this._sleepWithWorker(100)
+        } catch (err) {
+          break
+        }
         continue
       }
       // Always yield to the event loop; sleep for whatever is left of 33ms.
       // If inference took longer than one frame period, a 0ms sleep still
       // lets the browser process render callbacks and input before looping.
       const elapsed = performance.now() - t0
-      await this._sleepWithWorker(Math.max(0, TARGET_MS - elapsed))
+      try {
+        await this._sleepWithWorker(Math.max(0, TARGET_MS - elapsed))
+      } catch (e) {
+        break
+      }
     }
   }
 
