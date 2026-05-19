@@ -20,6 +20,13 @@ const MODEL_URL =
 export class MulticlassSegmenter implements Segmenter {
   readonly inputSize = { width: 256, height: 256 }
   private imageSegmenter?: ImageSegmenter
+  // Ring-buffer: two pre-allocated buffers alternated each frame to avoid
+  // allocating Float32Arrays in the hot segmentation loop (zero GC pressure).
+  private buffers = [
+    new Float32Array(256 * 256),
+    new Float32Array(256 * 256),
+  ]
+  private bufIdx = 0
 
   async init() {
     try {
@@ -58,7 +65,9 @@ export class MulticlassSegmenter implements Segmenter {
           const masks = result.confidenceMasks!
           // confidenceMasks[0] is the background probability.
           const bg = masks[0].getAsFloat32Array()
-          const out = new Float32Array(bg.length)
+          // Write into the current ring-buffer slot (zero allocation).
+          const out = this.buffers[this.bufIdx]
+          this.bufIdx ^= 1
           for (let i = 0; i < bg.length; i++) {
             const v = 1 - bg[i]
             out[i] = v < 0 ? 0 : v > 1 ? 1 : v

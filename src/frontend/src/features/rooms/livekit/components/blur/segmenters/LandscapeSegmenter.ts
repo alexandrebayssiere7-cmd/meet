@@ -15,6 +15,13 @@ const MODEL_URL =
 export class LandscapeSegmenter implements Segmenter {
   readonly inputSize = { width: 256, height: 144 }
   private imageSegmenter?: ImageSegmenter
+  // Ring-buffer: two pre-allocated buffers alternated each frame to avoid
+  // allocating Float32Arrays in the hot segmentation loop (zero GC pressure).
+  private buffers = [
+    new Float32Array(256 * 144),
+    new Float32Array(256 * 144),
+  ]
+  private bufIdx = 0
 
   async init() {
     try {
@@ -54,8 +61,11 @@ export class LandscapeSegmenter implements Segmenter {
           // directly — NOT background. Unlike multiclass (where class 0 = background),
           // the binary landscape model emits a single mask where high value = person.
           const fg = result.confidenceMasks![0].getAsFloat32Array()
-          // Copy: getAsFloat32Array() may return a view into a MediaPipe-managed buffer.
-          resolve(fg.slice())
+          // Copy into the current ring-buffer slot (zero allocation).
+          const out = this.buffers[this.bufIdx]
+          this.bufIdx ^= 1
+          out.set(fg)
+          resolve(out)
         }
       )
     })
