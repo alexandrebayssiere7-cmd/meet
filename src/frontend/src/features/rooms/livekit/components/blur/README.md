@@ -120,6 +120,16 @@ render loop on the GPU.
                        └────────────────┬─────────────────┘
                                         ▼
                        ┌──────────────────────────────────┐
+                       │   MASK EDGE EROSION (out-res)    │
+                       │   blur / fallback path only      │
+                       │   in-shader min over a square    │
+                       │   neighbourhood, radius =        │
+                       │   postCfg.erosion.pixels px      │
+                       │   (operates on upsampled mask;   │
+                       │   background used un-eroded mask)│
+                       └────────────────┬─────────────────┘
+                                        ▼
+                       ┌──────────────────────────────────┐
                        │   COMPOSITE                      │
                        │   BLUR / fallback:               │
                        │    pComposite                    │
@@ -285,15 +295,53 @@ The blur runs at half output resolution because the result is going to be
 behind the (soft-edged) person anyway — full-res blur is invisible and
 costs 4× the work.
 
-### 3.7 Composite — blur and fallback path
+### 3.7 Output-resolution mask edge erosion
 
-The standard composite shader implements `mix(background, video, mask)`,
-with the mask first eroded by `postCfg.erosion.pixels` (sampled per-pixel
-via a min over a small neighbourhood directly inside the shader). The
-erosion shrinks the visible silhouette by a couple of pixels, hiding any
-remaining halo from the mask not perfectly aligning with the RGB edge.
+**Problem.** Even after closing and EMA on the low-res mask and a clean
+upsample, the alpha transition does not always sit exactly on the RGB
+silhouette. A thin band of person-coloured pixels at the very edge leaks
+into the background — visible as a light fringe around the subject in
+the blur path, and as obvious contamination in the virtual-background
+path.
 
-### 3.8 Composite — segmo path (virtual background)
+**How it works.** On the blur / fallback path, the composite shader reads
+the upsampled mask and replaces each pixel by the **min** of the mask
+over a square neighbourhood of radius `postCfg.erosion.pixels` before
+running the alpha blend. The min reducer is the morphological erosion
+operator on a grayscale mask: it can only ever push the alpha edge
+*inward*, shrinking the silhouette by exactly that many pixels. The
+contaminated edge band then falls on the background side of the alpha
+transition rather than the foreground side, so it is replaced by the
+blurred background instead of being kept.
+
+A few important interactions:
+
+- The erosion runs on the **upsampled** (output-resolution) mask, not the
+  proc-resolution mask — the closing step in `_runPostProcessing()` is a
+  different operation aimed at filling interior holes, not at trimming
+  the silhouette.
+- The background-construction stage receives the **un-eroded** mask. Its
+  mask-weighted blur relies on the original (slightly larger) mask to
+  correctly zero out person contributions during the masked downsample;
+  feeding it the eroded mask would re-introduce halos around the
+  silhouette.
+- The segmo virtual-background compositor intentionally skips this pass.
+  Its closed-form alpha matting in the transition zone plus the
+  decontamination equation `I + (B_new − B_old)(1 − α)` already remove
+  the same kind of edge contamination at higher quality, so a global
+  erosion on top would just eat into the subject.
+- Implementation-wise the min is fused into `pComposite` as a small loop
+  in the fragment shader (no separate render target), so the cost is a
+  handful of extra texture taps per output pixel and no extra bandwidth.
+
+### 3.8 Composite — blur and fallback path
+
+The standard composite shader implements `mix(background, video, mask)`
+using the upsampled mask after the edge-erosion stage above. The final
+pixel is a per-pixel linear blend between the camera frame and the
+constructed background, weighted by alpha.
+
+### 3.9 Composite — segmo path (virtual background)
 
 When the mode is `virtual` *and* a virtual background image has finished
 uploading to a GPU texture, the renderer switches to a more elaborate
@@ -330,7 +378,7 @@ Stages:
 The blur path and the virtual-no-image fallback never enter this codepath
 and run the standard `pComposite` shader instead.
 
-### 3.9 Error handling & resilience — [errors/MattingErrorStore.ts](errors/MattingErrorStore.ts)
+### 3.10 Error handling & resilience — [errors/MattingErrorStore.ts](errors/MattingErrorStore.ts)
 
 Every failure mode that is recoverable converts to an entry in the matting
 error store rather than a thrown exception:
