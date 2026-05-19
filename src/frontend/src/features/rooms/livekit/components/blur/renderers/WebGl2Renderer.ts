@@ -884,6 +884,10 @@ export class WebGl2Renderer implements GpuRenderer {
       1 / this.outW,
       1 / this.outH
     )
+    gl.uniform1f(
+      gl.getUniformLocation(this.pCompositeSegmo, 'uErosionRadius'),
+      this.postCfg.erosion?.pixels ?? 0
+    )
     this._drawQuad()
 
     if (!useLightWrap) return
@@ -1223,6 +1227,7 @@ uniform sampler2D uVideo;     // Full-res camera frame
 uniform sampler2D uBg;        // Virtual background (full-res)
 uniform sampler2D uMask;      // Final processed mask
 uniform vec2 uOutTexel;       // (1/outW, 1/outH)
+uniform float uErosionRadius;
 out vec4 fragColor;
 
 // Cross-shaped sample pattern: wider reach for fg/bg color estimation (13 samples)
@@ -1235,6 +1240,16 @@ const vec2 mOff[13] = vec2[13](
 
 void main() {
   float rawMask = texture(uMask, vUv).r;
+  if (uErosionRadius > 0.0) {
+    for (int i = 1; i <= 16; i++) {
+      if (float(i) > uErosionRadius) break;
+      float fi = float(i);
+      rawMask = min(rawMask, texture(uMask, vUv + vec2(uOutTexel.x * fi, 0.0)).r);
+      rawMask = min(rawMask, texture(uMask, vUv - vec2(uOutTexel.x * fi, 0.0)).r);
+      rawMask = min(rawMask, texture(uMask, vUv + vec2(0.0, uOutTexel.y * fi)).r);
+      rawMask = min(rawMask, texture(uMask, vUv - vec2(0.0, uOutTexel.y * fi)).r);
+    }
+  }
   vec3 I = texture(uVideo, vUv).rgb;
 
   // Edge-adaptive sharpening: narrow the mask transition at strong camera edges
