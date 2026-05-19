@@ -2,6 +2,7 @@ import { PostProcessingConfig, UpsamplingConfig } from '..'
 import { pushMattingError } from '../errors/MattingErrorStore'
 import { GpuRenderer, GpuRendererInitOpts } from './GpuRenderer'
 import { GpuGuidedFilter } from './GpuGuidedFilter'
+import { Viewport } from '../framing/FramingController'
 
 /**
  * WebGL2 implementation of the matting compositor.
@@ -44,6 +45,16 @@ export class WebGl2Renderer implements GpuRenderer {
   private pMaskWeightedBlur!: WebGLProgram
   private pMorphology!: WebGLProgram
   private pComposite!: WebGLProgram
+  // Viewport remap programs used by the segmo virtual-bg path to "frame" the
+  // video and mask BEFORE compositing. The background stays untouched, so it
+  // remains visually fixed while the person is zoomed / recentred.
+  private pViewportRemapRgb!: WebGLProgram
+  private pViewportRemapR!: WebGLProgram
+  private framedVideoTex: WebGLTexture | null = null
+  private fboFramedVideo: WebGLFramebuffer | null = null
+  private framedMaskTex: WebGLTexture | null = null
+  private fboFramedMask: WebGLFramebuffer | null = null
+  private viewport: Viewport = { x: 0, y: 0, width: 1, height: 1 }
   // Segmo-style virtual-background compositor (foreground recovery + edge-adaptive
   // sharpening + closed-form alpha matting). Used ONLY when mode === 'virtual' and
   // a virtual background image is uploaded. Never runs in the blur path.
@@ -197,6 +208,25 @@ export class WebGl2Renderer implements GpuRenderer {
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
     }
 
+    // 1b. Drop lazily-allocated framed targets so they're recreated at the new
+    // size on the next segmo composite call.
+    if (this.framedVideoTex) {
+      gl.deleteTexture(this.framedVideoTex)
+      this.framedVideoTex = null
+    }
+    if (this.fboFramedVideo) {
+      gl.deleteFramebuffer(this.fboFramedVideo)
+      this.fboFramedVideo = null
+    }
+    if (this.framedMaskTex) {
+      gl.deleteTexture(this.framedMaskTex)
+      this.framedMaskTex = null
+    }
+    if (this.fboFramedMask) {
+      gl.deleteFramebuffer(this.fboFramedMask)
+      this.fboFramedMask = null
+    }
+
     // 2. Reallocate half-res textures
     if (this.bgDownTex) {
       gl.bindTexture(gl.TEXTURE_2D, this.bgDownTex)
@@ -315,6 +345,10 @@ export class WebGl2Renderer implements GpuRenderer {
     }
   }
 
+  setViewport(vp: Viewport) {
+    this.viewport = vp
+  }
+
   render(videoElement: HTMLVideoElement) {
     if (!videoElement || videoElement.videoWidth === 0) return
     const gl = this.gl
@@ -361,7 +395,9 @@ export class WebGl2Renderer implements GpuRenderer {
       return
     }
 
-    // 5. Composite to the canvas.
+    // 5. Composite to the canvas. No framing is applied on this path — only the
+    //    segmo (virtual-bg image) path supports auto-framing, and there the
+    //    viewport is consumed by the framedVideo / framedMask pre-passes.
     gl.bindFramebuffer(gl.FRAMEBUFFER, null)
     gl.viewport(0, 0, this.outW, this.outH)
     gl.useProgram(this.pComposite)
@@ -437,6 +473,8 @@ export class WebGl2Renderer implements GpuRenderer {
       this.segmoCompositeTex,
       this.maskedFgTex,
       this.tintedVideoTex,
+      this.framedVideoTex,
+      this.framedMaskTex,
     ]
     for (const t of tex) if (t) gl.deleteTexture(t)
     const fbo = [
@@ -450,6 +488,8 @@ export class WebGl2Renderer implements GpuRenderer {
       this.fboSegmoComposite,
       this.fboMaskedFg,
       this.fboTintedVideo,
+      this.fboFramedVideo,
+      this.fboFramedMask,
     ]
     for (const f of fbo) if (f) gl.deleteFramebuffer(f)
     if (this.quadBuffer) gl.deleteBuffer(this.quadBuffer)
@@ -467,6 +507,8 @@ export class WebGl2Renderer implements GpuRenderer {
       this.pLightWrap,
       this.pMaskedFg,
       this.pFgColorCast,
+      this.pViewportRemapRgb,
+      this.pViewportRemapR,
     ]
     for (const p of programs) if (p) gl.deleteProgram(p)
   }
@@ -779,6 +821,16 @@ export class WebGl2Renderer implements GpuRenderer {
       console.log('[WebGl2Renderer] segmo virtual-bg composite active')
     }
 
+    // Pre-passes: produce "framed" video and mask textures via viewport
+    // remap. Everything downstream operates on these, so the person is
+    // zoomed/recentred while the background stays anchored to its native
+    // (untransformed) UVs. Identity viewport ⇒ trivial blit.
+    this._ensureFramedTargets()
+    this._renderFramedRgb(this.videoTex, this.fboFramedVideo!)
+    this._renderFramedR(maskTex, this.fboFramedMask!)
+    const framedVideoTex = this.framedVideoTex!
+    const framedMaskTex = this.framedMaskTex!
+
     // Pass A: edge-only feather (widens the transition band near silhouettes,
     // leaves interior/exterior alone). Output is R8 at output resolution.
     this._ensureSegmoFeatherTarget()
@@ -786,7 +838,7 @@ export class WebGl2Renderer implements GpuRenderer {
     gl.viewport(0, 0, this.outW, this.outH)
     gl.useProgram(this.pSegmoEdgeFeather)
     gl.activeTexture(gl.TEXTURE0)
-    gl.bindTexture(gl.TEXTURE_2D, maskTex)
+    gl.bindTexture(gl.TEXTURE_2D, framedMaskTex)
     gl.uniform1i(gl.getUniformLocation(this.pSegmoEdgeFeather, 'uMask'), 0)
     gl.uniform2f(
       gl.getUniformLocation(this.pSegmoEdgeFeather, 'uTexel'),
@@ -803,7 +855,7 @@ export class WebGl2Renderer implements GpuRenderer {
     // strength <= 0; otherwise produces tintedVideoTex which feeds the composite
     // in place of videoTex. Bg mipmaps are regenerated lazily after each upload.
     const useTint = this.segmoForegroundTintStrength > 0.0
-    let videoSrc: WebGLTexture = this.videoTex
+    let videoSrc: WebGLTexture = framedVideoTex
     if (useTint) {
       // Lazy: ensure the bg texture has a mipmap chain after upload. Detects
       // upload-completed transitions via virtualImgUploaded (reset to false in
@@ -826,7 +878,7 @@ export class WebGl2Renderer implements GpuRenderer {
         gl.viewport(0, 0, this.outW, this.outH)
         gl.useProgram(this.pMaskedFg)
         gl.activeTexture(gl.TEXTURE0)
-        gl.bindTexture(gl.TEXTURE_2D, this.videoTex)
+        gl.bindTexture(gl.TEXTURE_2D, framedVideoTex)
         gl.uniform1i(gl.getUniformLocation(this.pMaskedFg, 'uVideo'), 0)
         gl.activeTexture(gl.TEXTURE1)
         gl.bindTexture(gl.TEXTURE_2D, this.segmoFeatheredMaskTex!)
@@ -842,7 +894,7 @@ export class WebGl2Renderer implements GpuRenderer {
         gl.viewport(0, 0, this.outW, this.outH)
         gl.useProgram(this.pFgColorCast)
         gl.activeTexture(gl.TEXTURE0)
-        gl.bindTexture(gl.TEXTURE_2D, this.videoTex)
+        gl.bindTexture(gl.TEXTURE_2D, framedVideoTex)
         gl.uniform1i(gl.getUniformLocation(this.pFgColorCast, 'uVideo'), 0)
         gl.activeTexture(gl.TEXTURE1)
         gl.bindTexture(gl.TEXTURE_2D, this.maskedFgTex!)
@@ -917,6 +969,101 @@ export class WebGl2Renderer implements GpuRenderer {
     const gl = this.gl
     gl.bindVertexArray(this.vao)
     gl.drawArrays(gl.TRIANGLES, 0, 3)
+  }
+
+  /**
+   * Lazily allocate the framed video / framed mask FBOs at output resolution.
+   * Used only by the segmo virtual-bg path. Dropped on resizeOutput so they're
+   * reallocated at the new size.
+   */
+  private _ensureFramedTargets() {
+    if (
+      this.framedVideoTex && this.fboFramedVideo &&
+      this.framedMaskTex && this.fboFramedMask
+    ) return
+    const gl = this.gl
+
+    if (!this.framedVideoTex || !this.fboFramedVideo) {
+      const t = gl.createTexture()!
+      gl.bindTexture(gl.TEXTURE_2D, t)
+      gl.texImage2D(
+        gl.TEXTURE_2D, 0, gl.RGBA, this.outW, this.outH, 0,
+        gl.RGBA, gl.UNSIGNED_BYTE, null
+      )
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+      const f = gl.createFramebuffer()!
+      gl.bindFramebuffer(gl.FRAMEBUFFER, f)
+      gl.framebufferTexture2D(
+        gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0
+      )
+      const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER)
+      if (status !== gl.FRAMEBUFFER_COMPLETE) {
+        throw new Error(`framed video FBO incomplete: 0x${status.toString(16)}`)
+      }
+      this.framedVideoTex = t
+      this.fboFramedVideo = f
+    }
+
+    if (!this.framedMaskTex || !this.fboFramedMask) {
+      const t = gl.createTexture()!
+      gl.bindTexture(gl.TEXTURE_2D, t)
+      gl.texImage2D(
+        gl.TEXTURE_2D, 0, gl.R8, this.outW, this.outH, 0,
+        gl.RED, gl.UNSIGNED_BYTE, null
+      )
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+      const f = gl.createFramebuffer()!
+      gl.bindFramebuffer(gl.FRAMEBUFFER, f)
+      gl.framebufferTexture2D(
+        gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0
+      )
+      const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER)
+      if (status !== gl.FRAMEBUFFER_COMPLETE) {
+        throw new Error(`framed mask FBO incomplete: 0x${status.toString(16)}`)
+      }
+      this.framedMaskTex = t
+      this.fboFramedMask = f
+    }
+  }
+
+  /**
+   * Render src through the current viewport into dst (FBO + tex). Identity
+   * viewport = blit. Two variants for RGB / R8 channel layouts.
+   */
+  private _renderFramedRgb(srcTex: WebGLTexture, dstFbo: WebGLFramebuffer) {
+    const gl = this.gl
+    gl.bindFramebuffer(gl.FRAMEBUFFER, dstFbo)
+    gl.viewport(0, 0, this.outW, this.outH)
+    gl.useProgram(this.pViewportRemapRgb)
+    gl.activeTexture(gl.TEXTURE0)
+    gl.bindTexture(gl.TEXTURE_2D, srcTex)
+    gl.uniform1i(gl.getUniformLocation(this.pViewportRemapRgb, 'uSrc'), 0)
+    gl.uniform4f(
+      gl.getUniformLocation(this.pViewportRemapRgb, 'uViewport'),
+      this.viewport.x, this.viewport.y, this.viewport.width, this.viewport.height
+    )
+    this._drawQuad()
+  }
+
+  private _renderFramedR(srcTex: WebGLTexture, dstFbo: WebGLFramebuffer) {
+    const gl = this.gl
+    gl.bindFramebuffer(gl.FRAMEBUFFER, dstFbo)
+    gl.viewport(0, 0, this.outW, this.outH)
+    gl.useProgram(this.pViewportRemapR)
+    gl.activeTexture(gl.TEXTURE0)
+    gl.bindTexture(gl.TEXTURE_2D, srcTex)
+    gl.uniform1i(gl.getUniformLocation(this.pViewportRemapR, 'uSrc'), 0)
+    gl.uniform4f(
+      gl.getUniformLocation(this.pViewportRemapR, 'uViewport'),
+      this.viewport.x, this.viewport.y, this.viewport.width, this.viewport.height
+    )
+    this._drawQuad()
   }
 
   private _buildQuad() {
@@ -1178,11 +1325,47 @@ void main() {
   fragColor = vec4(mix(bg, fg, t), 1.0);
 }`
 
+    // Viewport remap: samples a sub-region of a source texture and writes it
+    // stretched to fill the output. Used by the segmo virtual-bg path to
+    // produce "framed" video and mask textures BEFORE compositing, so only
+    // the person is zoomed/recentred while the background stays untouched.
+    // Identity viewport (0,0,1,1) degenerates to a full-screen blit.
+    const FS_VIEWPORT_REMAP_RGB = `#version 300 es
+precision mediump float;
+in vec2 vUv;
+uniform sampler2D uSrc;
+uniform vec4 uViewport; // x, y, w, h normalised in [0,1]
+out vec4 fragColor;
+void main() {
+  vec2 uv = uViewport.xy + vUv * uViewport.zw;
+  fragColor = vec4(texture(uSrc, uv).rgb, 1.0);
+}`
+
+    const FS_VIEWPORT_REMAP_R = `#version 300 es
+precision mediump float;
+in vec2 vUv;
+uniform sampler2D uSrc;
+uniform vec4 uViewport;
+out vec4 fragColor;
+void main() {
+  vec2 uv = uViewport.xy + vUv * uViewport.zw;
+  // Force mask to 0 outside the source rect — otherwise CLAMP_TO_EDGE
+  // sampling would extrude the edge mask value across the empty regions
+  // produced by translation, creating "phantom person" strips along the
+  // canvas borders.
+  float inside = step(0.0, uv.x) * step(uv.x, 1.0)
+               * step(0.0, uv.y) * step(uv.y, 1.0);
+  float m = texture(uSrc, uv).r * inside;
+  fragColor = vec4(m, 0.0, 0.0, 1.0);
+}`
+
     this.pUploadMask = this._link(VS, FS_COPY_R)
     this.pEma = this._link(VS, FS_EMA)
     this.pCopyR = this._link(VS, FS_COPY_R)
     this.pMaskedDownsample = this._link(VS, FS_MASKED_DOWNSAMPLE)
     this.pMaskWeightedBlur = this._link(VS, FS_MASK_WEIGHTED_BLUR)
+    this.pViewportRemapRgb = this._link(VS, FS_VIEWPORT_REMAP_RGB)
+    this.pViewportRemapR = this._link(VS, FS_VIEWPORT_REMAP_R)
     
     const FS_MORPHOLOGY = `#version 300 es
 precision mediump float;

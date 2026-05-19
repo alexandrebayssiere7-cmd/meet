@@ -72,4 +72,11 @@ export class PreProcessingPipeline {
   reset(): void {
     this.roiCropper?.reset()
   }
+
+  /** Stabilised bbox of the person(s) in the frame. Null if ROI tracking is disabled
+   *  or no mask has been produced yet. Consumed by the framing pass. */
+  getStablePersonBbox(): BBox | null {
+    if (!this.roiCropper || !this.roiCropper.isInitialised()) return null
+    return this.roiCropper.getCurrentBbox()
+  }
 }

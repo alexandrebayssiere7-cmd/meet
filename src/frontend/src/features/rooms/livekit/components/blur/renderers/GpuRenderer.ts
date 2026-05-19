@@ -1,4 +1,5 @@
 import { PostProcessingConfig, UpsamplingConfig } from '..'
+import { Viewport } from '../framing/FramingController'
 
 export interface GpuRendererInitOpts {
   processingW: number
@@ -29,6 +30,9 @@ export interface GpuRenderer {
   setMode(mode: 'blur' | 'virtual'): void
   setPostProcessing(cfg: PostProcessingConfig): void
   setUpsampling(cfg: UpsamplingConfig): void
+  /** Normalised viewport applied as a final framing pass over the composite.
+   *  Identity = {x:0, y:0, width:1, height:1}. */
+  setViewport(vp: Viewport): void
   render(videoElement: HTMLVideoElement): void
   /** Read a small RGBA8 patch — used by preflight diagnostics. */
   readPixels(x: number, y: number, w: number, h: number): Uint8Array

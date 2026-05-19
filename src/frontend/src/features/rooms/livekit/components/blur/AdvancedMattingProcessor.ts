@@ -13,6 +13,10 @@ import { BBox } from './preprocessing/RoiCropper'
 import { Segmenter, createSegmenter, probeMediapipeDelegate } from './segmenters'
 import { WebGl2Renderer } from './renderers/WebGl2Renderer'
 import { pushMattingError } from './errors/MattingErrorStore'
+import {
+  FramingController,
+  DEFAULT_FRAMING_CONFIG,
+} from './framing/FramingController'
 
 const SEGMENTATION_MASK_CANVAS_ID = 'background-blur-local-segmentation'
 const BLUR_CANVAS_ID = 'background-blur-local'
@@ -67,6 +71,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
   private _destroyed = false
   private _preProcessingPipeline?: PreProcessingPipeline
   private _lastMask?: Float32Array
+  private _framingController = new FramingController()
 
   constructor(opts: ProcessorConfig) {
     this.name = opts.type === ProcessorType.VIRTUAL ? 'virtual' : 'blur'
@@ -398,6 +403,9 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     const preCfg = this._getPreProcessingConfig()
     this._preProcessingPipeline =
       preCfg?.roiCropping?.enabled ? new PreProcessingPipeline(preCfg) : undefined
+    // The bbox source has changed (or disappeared). Reset the framing animation
+    // so it doesn't carry over a viewport from the previous track/mode.
+    this._framingController.reset()
   }
 
   private async _initSegmenterBackground(model: SegmentationModel) {
@@ -647,6 +655,20 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     if (vw !== this.gpuRenderer.outW || vh !== this.gpuRenderer.outH) {
       this.gpuRenderer.resizeOutput(vw, vh)
     }
+
+    // Auto-framing: only useful with a fixed virtual background. With blur the
+    // recentred crop reveals the rest of the camera frame at the edges, which
+    // breaks the illusion of a stable scene — so we skip it there.
+    const framingEnabled = this.options.type === ProcessorType.VIRTUAL
+    const personBbox = this._preProcessingPipeline?.getStablePersonBbox() ?? null
+    this._framingController.update(
+      personBbox,
+      vw / vh,
+      performance.now(),
+      { ...DEFAULT_FRAMING_CONFIG, enabled: framingEnabled }
+    )
+    this.gpuRenderer.setViewport(this._framingController.getViewport())
+
     const mask = this._latestMask
     if (mask) {
       this.gpuRenderer.uploadMask(mask, this.processingWidth, this.processingHeight)
@@ -751,6 +773,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     this._preProcessingPipeline = undefined
     this._lastMask = undefined
     this._latestMask = null
+    this._framingController.reset()
     this._resolveReady()
 
     if (this.processedTrack && this.processedTrack !== this.source) {
