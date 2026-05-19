@@ -40,6 +40,10 @@ import {
 import { VideoFrameTracker } from './preprocessing/VideoFrameTracker'
 import { SegmenterLoopRunner, FrameMaskPair } from './segmenters/SegmenterLoopRunner'
 import { RenderLoopRunner } from './renderers/RenderLoopRunner'
+import {
+  FramingController,
+  DEFAULT_FRAMING_CONFIG,
+} from './framing/FramingController'
 
 const BLUR_CANVAS_ID = 'background-blur-local'
 const DEFAULT_BLUR = 10
@@ -91,6 +95,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
   private _readyResolvers: Array<() => void> = []
   private _destroyed = false
   private _preProcessingPipeline?: PreProcessingPipeline
+  private _framingController = new FramingController()
 
   constructor(opts: ProcessorConfig) {
     this.name = opts.type === ProcessorType.VIRTUAL ? 'virtual' : 'blur'
@@ -125,8 +130,22 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       () => this._latestPair,
       (w, h) => this._canvasManager.getPassthroughMask(w, h),
       () => this.getLatencyParams(),
-      () => ({ w: this.processingWidth, h: this.processingHeight })
+      () => ({ w: this.processingWidth, h: this.processingHeight }),
+      (gpuRenderer, aspect, now) => this._applyFraming(gpuRenderer, aspect, now)
     )
+  }
+
+  // Auto-framing pass: useful with a fixed virtual background. With blur the
+  // recentred crop reveals the rest of the camera frame at the edges, which
+  // breaks the illusion of a stable scene — so we skip it there.
+  private _applyFraming(gpuRenderer: GpuRenderer, aspect: number, now: number) {
+    const framingEnabled = this.options.type === ProcessorType.VIRTUAL
+    const personBbox = this._preProcessingPipeline?.getCurrentBbox() ?? null
+    this._framingController.update(personBbox, aspect, now, {
+      ...DEFAULT_FRAMING_CONFIG,
+      enabled: framingEnabled,
+    })
+    gpuRenderer.setViewport(this._framingController.getViewport())
   }
 
   // Getters for external and testing compatibility
@@ -422,6 +441,9 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     this._preProcessingPipeline = preCfg?.roiCropping?.enabled
       ? new PreProcessingPipeline(preCfg)
       : undefined
+    // The bbox source has changed (or disappeared). Reset the framing animation
+    // so it doesn't carry over a viewport from the previous track/mode.
+    this._framingController.reset()
   }
 
   private async _createAndCalibrateSegmenter(model: SegmentationModel): Promise<{
@@ -660,6 +682,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     this.gpuRenderer?.destroy()
     this.gpuRenderer = undefined
     this._preProcessingPipeline = undefined
+    this._framingController.reset()
     this._canvasManager.destroy()
     if (this._latestPair) {
       try {

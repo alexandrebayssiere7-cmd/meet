@@ -172,6 +172,12 @@ export class Canvas2dRenderer implements GpuRenderer {
     void t
   }
 
+  setViewport(vp: { x: number; y: number; width: number; height: number }): void {
+    // No-op: auto-framing requires render-to-texture which the Canvas2D
+    // fallback doesn't model. The renderer composites at identity viewport.
+    void vp
+  }
+
   render(source: RenderSource, liveSource?: RenderSource): void {
     void liveSource
     if (!source) return

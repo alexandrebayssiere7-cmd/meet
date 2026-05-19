@@ -35,7 +35,15 @@ export class RenderLoopRunner {
       latencyAuto: boolean
       maskPrediction: boolean
     },
-    private getProcessingDimensions: () => { w: number; h: number }
+    private getProcessingDimensions: () => { w: number; h: number },
+    /** Optional auto-framing pass: invoked once per frame, before render(),
+     *  so the implementation can update its controller and push a viewport
+     *  to the renderer. */
+    private applyFraming?: (
+      gpuRenderer: GpuRenderer,
+      aspect: number,
+      now: number
+    ) => void
   ) {}
 
   start(videoElement: HTMLVideoElement, outputCanvas: HTMLCanvasElement) {
@@ -90,6 +98,11 @@ export class RenderLoopRunner {
     const gpuRenderer = this.getGpuRenderer()
     if (!gpuRenderer || !this.videoElement || this.videoElement.videoWidth === 0) {
       return
+    }
+
+    if (this.applyFraming) {
+      const aspect = this.videoElement.videoWidth / this.videoElement.videoHeight
+      this.applyFraming(gpuRenderer, aspect, performance.now())
     }
 
     const pair = this.getLatestPair()
