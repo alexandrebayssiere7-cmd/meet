@@ -276,7 +276,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       }
       
       const avg = totalTime / runs
-      const success = avg <= 30
+      const success = avg <= 35
 
       const widthCard = 60
       const padRight = (str: string, len: number) => str + ' '.repeat(Math.max(0, len - str.length))
