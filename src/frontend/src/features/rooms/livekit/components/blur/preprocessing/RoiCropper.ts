@@ -122,11 +122,31 @@ function resizeFloat32(
  *   2. model.segment(croppedFrame)                 → maskInCropSpace
  *   3. fullMask = roiCropper.remapMask(maskInCropSpace, maskW, maskH, bbox)
  *   4. roiCropper.updateWithMask(fullMask, maskW, maskH)
+ *
+ * Zero-allocation design: two pre-allocated Float32Arrays are alternated each
+ * frame (ring-buffer / double buffering) so the hot path never triggers GC.
  */
 export class RoiCropper {
   private currentBbox: BBox = { ...FULL_FRAME }
   private hasMask = false
   private frameCounter = 0
+
+  // Pre-allocated ring-buffer for remapMask output. Sized for the maximum
+  // processing resolution the pipeline supports (256×256). The caller receives
+  // a reference that stays valid until the NEXT remapMask call.
+  private fullMaskBuffers: [Float32Array, Float32Array]
+  private fullBufIdx = 0
+  private fullBufW = 0
+  private fullBufH = 0
+
+  constructor(maxW = 256, maxH = 256) {
+    this.fullMaskBuffers = [
+      new Float32Array(maxW * maxH),
+      new Float32Array(maxW * maxH),
+    ]
+    this.fullBufW = maxW
+    this.fullBufH = maxH
+  }
 
   /** Returns the stabilised bbox to use when extracting the model input for this frame. */
   getNextCropBbox(): BBox {
@@ -139,8 +159,11 @@ export class RoiCropper {
 
   /**
    * Remap a mask that lives in crop-bbox space back to the full-frame mask space.
-   * Creates a zero-filled fullW×fullH array and pastes the resized crop mask at
-   * the correct position.
+   *
+   * Fused remap + bilinear resize in a single pass: for each destination pixel
+   * that falls inside the bbox region, compute its source coordinate in the
+   * crop mask, bilinearly interpolate, and write directly into the pre-allocated
+   * output buffer. All other pixels are zeroed. Zero allocations per call.
    */
   remapMask(
     cropMask: Float32Array,
@@ -150,7 +173,22 @@ export class RoiCropper {
     fullW: number,
     fullH: number
   ): Float32Array {
-    const full = new Float32Array(fullW * fullH)
+    // Ensure buffers are large enough (reallocate only on resolution change).
+    if (fullW * fullH > this.fullBufW * this.fullBufH) {
+      this.fullMaskBuffers = [
+        new Float32Array(fullW * fullH),
+        new Float32Array(fullW * fullH),
+      ]
+      this.fullBufW = fullW
+      this.fullBufH = fullH
+    }
+
+    // Pick the current buffer and swap the index for next frame.
+    const full = this.fullMaskBuffers[this.fullBufIdx]
+    this.fullBufIdx ^= 1
+
+    // Zero the entire buffer (TypedArray.fill is a fast memset).
+    full.fill(0)
 
     const dstX = Math.round(usedBbox.x * fullW)
     const dstY = Math.round(usedBbox.y * fullH)
@@ -159,15 +197,37 @@ export class RoiCropper {
 
     if (dstW <= 0 || dstH <= 0) return full
 
-    const resized = resizeFloat32(cropMask, cropMaskW, cropMaskH, dstW, dstH)
+    // Fused bilinear resize + remap: compute source coordinates directly.
+    const scaleX = cropMaskW / dstW
+    const scaleY = cropMaskH / dstH
 
-    for (let y = 0; y < dstH; y++) {
-      const fy = dstY + y
+    for (let dy = 0; dy < dstH; dy++) {
+      const fy = dstY + dy
       if (fy < 0 || fy >= fullH) continue
-      for (let x = 0; x < dstW; x++) {
-        const fx = dstX + x
+
+      const sy = (dy + 0.5) * scaleY - 0.5
+      const sy0 = Math.floor(sy)
+      const fracY = sy - sy0
+      const iy0 = sy0 < 0 ? 0 : sy0 >= cropMaskH ? cropMaskH - 1 : sy0
+      const iy1 = sy0 + 1 < 0 ? 0 : sy0 + 1 >= cropMaskH ? cropMaskH - 1 : sy0 + 1
+      const row0 = iy0 * cropMaskW
+      const row1 = iy1 * cropMaskW
+
+      for (let dx = 0; dx < dstW; dx++) {
+        const fx = dstX + dx
         if (fx < 0 || fx >= fullW) continue
-        full[fy * fullW + fx] = resized[y * dstW + x]
+
+        const sx = (dx + 0.5) * scaleX - 0.5
+        const sx0 = Math.floor(sx)
+        const fracX = sx - sx0
+        const ix0 = sx0 < 0 ? 0 : sx0 >= cropMaskW ? cropMaskW - 1 : sx0
+        const ix1 = sx0 + 1 < 0 ? 0 : sx0 + 1 >= cropMaskW ? cropMaskW - 1 : sx0 + 1
+
+        const v =
+          (1 - fracY) * ((1 - fracX) * cropMask[row0 + ix0] + fracX * cropMask[row0 + ix1]) +
+          fracY        * ((1 - fracX) * cropMask[row1 + ix0] + fracX * cropMask[row1 + ix1])
+
+        full[fy * fullW + fx] = v
       }
     }
 
@@ -199,3 +259,4 @@ export class RoiCropper {
     return this.hasMask
   }
 }
+
