@@ -667,7 +667,11 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     if (this.videoElement && 'requestVideoFrameCallback' in this.videoElement) {
       this._renderLoopHandle = (this.videoElement as any).requestVideoFrameCallback(() => {
         if (!this._segLoopActive || this._destroyed) return
-        this._renderFrame()
+        try {
+          this._renderFrame()
+        } catch (e) {
+          console.error('[AdvancedMattingProcessor] Render frame failed, skipping:', e)
+        }
         this._scheduleRender()
       })
       return
@@ -678,7 +682,11 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       if (!this._segLoopActive || this._destroyed) return
       if (now - this._lastRenderTime >= AdvancedMattingProcessor.RENDER_TARGET_MS) {
         this._lastRenderTime = now
-        this._renderFrame()
+        try {
+          this._renderFrame()
+        } catch (e) {
+          console.error('[AdvancedMattingProcessor] Render frame failed (fallback), skipping:', e)
+        }
       }
       this._scheduleRender()
     })
