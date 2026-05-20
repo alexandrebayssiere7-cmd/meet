@@ -40,6 +40,8 @@ export class WebGl2Renderer implements GpuRenderer {
   private pUploadMask!: WebGLProgram
   private pSigmoid!: WebGLProgram
   private pEma!: WebGLProgram
+  private pOneEuroDeriv!: WebGLProgram
+  private pOneEuroValue!: WebGLProgram
   private pCopyR!: WebGLProgram
   private pMaskedDownsample!: WebGLProgram
   private pMaskWeightedBlur!: WebGLProgram
@@ -82,6 +84,11 @@ export class WebGl2Renderer implements GpuRenderer {
   private maskA!: WebGLTexture // R8 ping
   private maskB!: WebGLTexture // R8 pong
   private emaTex!: WebGLTexture // R8, persistent across frames
+  // One-Euro filter: ping-pong for filtered value (x̂) and filtered derivative (dx̂)
+  private oneEuroValA!: WebGLTexture  // R8
+  private oneEuroValB!: WebGLTexture  // R8
+  private oneEuroDerivA!: WebGLTexture // R8, dx̂ encoded as (v/60+0.5)
+  private oneEuroDerivB!: WebGLTexture // R8
   private bgDownTex!: WebGLTexture // RGBA half-res masked downsample
   private bgBlurPingTex!: WebGLTexture // RGBA half-res after H blur
   private bgBlurPongTex!: WebGLTexture // RGBA half-res after V blur
@@ -91,6 +98,10 @@ export class WebGl2Renderer implements GpuRenderer {
   private fboMaskA!: WebGLFramebuffer
   private fboMaskB!: WebGLFramebuffer
   private fboEma!: WebGLFramebuffer
+  private fboOneEuroValA!: WebGLFramebuffer
+  private fboOneEuroValB!: WebGLFramebuffer
+  private fboOneEuroDerivA!: WebGLFramebuffer
+  private fboOneEuroDerivB!: WebGLFramebuffer
   private fboBgDown!: WebGLFramebuffer
   private fboBgBlurPing!: WebGLFramebuffer
   private fboBgBlurPong!: WebGLFramebuffer
@@ -98,6 +109,11 @@ export class WebGl2Renderer implements GpuRenderer {
   private halfW = 0
   private halfH = 0
   private hasEmaState = false
+  private hasOneEuroState = false
+  // false = A is current (read), B is target (write); true = B current, A target
+  private oneEuroValFlip = false
+  private oneEuroDerivFlip = false
+  private lastFrameTs = 0
   private virtualImgPending: HTMLImageElement | null = null
   private virtualImgUploaded = false
 
@@ -159,12 +175,16 @@ export class WebGl2Renderer implements GpuRenderer {
     this.procW = w
     this.procH = h
     const gl = this.gl
-    // Reallocate proc-sized textures (rawMask, maskA, maskB, ema)
+    // Reallocate proc-sized textures (rawMask, maskA, maskB, ema, oneEuro)
     for (const tex of [
       this.rawMaskTex,
       this.maskA,
       this.maskB,
       this.emaTex,
+      this.oneEuroValA,
+      this.oneEuroValB,
+      this.oneEuroDerivA,
+      this.oneEuroDerivB,
     ]) {
       gl.bindTexture(gl.TEXTURE_2D, tex)
       gl.texImage2D(
@@ -180,6 +200,9 @@ export class WebGl2Renderer implements GpuRenderer {
       )
     }
     this.hasEmaState = false
+    this.hasOneEuroState = false
+    this.oneEuroValFlip = false
+    this.oneEuroDerivFlip = false
   }
 
   resizeOutput(w: number, h: number) {
@@ -430,6 +453,10 @@ export class WebGl2Renderer implements GpuRenderer {
       this.maskA,
       this.maskB,
       this.emaTex,
+      this.oneEuroValA,
+      this.oneEuroValB,
+      this.oneEuroDerivA,
+      this.oneEuroDerivB,
       this.bgDownTex,
       this.bgBlurPingTex,
       this.bgBlurPongTex,
@@ -444,6 +471,10 @@ export class WebGl2Renderer implements GpuRenderer {
       this.fboMaskA,
       this.fboMaskB,
       this.fboEma,
+      this.fboOneEuroValA,
+      this.fboOneEuroValB,
+      this.fboOneEuroDerivA,
+      this.fboOneEuroDerivB,
       this.fboBgDown,
       this.fboBgBlurPing,
       this.fboBgBlurPong,
@@ -459,6 +490,8 @@ export class WebGl2Renderer implements GpuRenderer {
       this.pUploadMask,
       this.pSigmoid,
       this.pEma,
+      this.pOneEuroDeriv,
+      this.pOneEuroValue,
       this.pCopyR,
       this.pMaskedDownsample,
       this.pMaskWeightedBlur,
@@ -550,6 +583,65 @@ export class WebGl2Renderer implements GpuRenderer {
       gl.uniform1i(gl.getUniformLocation(this.pCopyR, 'uTex'), 0)
       this._drawQuad()
       this.hasEmaState = true
+    }
+
+    // One-Euro filter (adaptive temporal low-pass — runs after EMA if both enabled)
+    if (this.postCfg.oneEuro) {
+      const { minCutoff, beta, dCutoff } = this.postCfg.oneEuro
+      const now = performance.now()
+      const dt = this.hasOneEuroState
+        ? Math.min(0.1, Math.max(0.001, (now - this.lastFrameTs) / 1000))
+        : 0.033
+      this.lastFrameTs = now
+      const firstFrame = this.hasOneEuroState ? 0.0 : 1.0
+
+      const prevVal    = this.oneEuroValFlip   ? this.oneEuroValB    : this.oneEuroValA
+      const nextValFbo = this.oneEuroValFlip   ? this.fboOneEuroValA : this.fboOneEuroValB
+      const nextValTex = this.oneEuroValFlip   ? this.oneEuroValA    : this.oneEuroValB
+
+      const prevDeriv    = this.oneEuroDerivFlip ? this.oneEuroDerivB    : this.oneEuroDerivA
+      const nextDerivFbo = this.oneEuroDerivFlip ? this.fboOneEuroDerivA : this.fboOneEuroDerivB
+      const nextDerivTex = this.oneEuroDerivFlip ? this.oneEuroDerivA    : this.oneEuroDerivB
+
+      // Pass 1: compute new smoothed velocity dx̂ → nextDerivFbo
+      gl.bindFramebuffer(gl.FRAMEBUFFER, nextDerivFbo)
+      gl.useProgram(this.pOneEuroDeriv)
+      gl.activeTexture(gl.TEXTURE0)
+      gl.bindTexture(gl.TEXTURE_2D, src)
+      gl.uniform1i(gl.getUniformLocation(this.pOneEuroDeriv, 'uCur'), 0)
+      gl.activeTexture(gl.TEXTURE1)
+      gl.bindTexture(gl.TEXTURE_2D, prevVal)
+      gl.uniform1i(gl.getUniformLocation(this.pOneEuroDeriv, 'uPrevVal'), 1)
+      gl.activeTexture(gl.TEXTURE2)
+      gl.bindTexture(gl.TEXTURE_2D, prevDeriv)
+      gl.uniform1i(gl.getUniformLocation(this.pOneEuroDeriv, 'uPrevDeriv'), 2)
+      gl.uniform1f(gl.getUniformLocation(this.pOneEuroDeriv, 'uDt'), dt)
+      gl.uniform1f(gl.getUniformLocation(this.pOneEuroDeriv, 'uDCutoff'), dCutoff)
+      gl.uniform1f(gl.getUniformLocation(this.pOneEuroDeriv, 'uFirstFrame'), firstFrame)
+      this._drawQuad()
+
+      // Pass 2: compute new filtered value x̂ → nextValFbo
+      gl.bindFramebuffer(gl.FRAMEBUFFER, nextValFbo)
+      gl.useProgram(this.pOneEuroValue)
+      gl.activeTexture(gl.TEXTURE0)
+      gl.bindTexture(gl.TEXTURE_2D, src)
+      gl.uniform1i(gl.getUniformLocation(this.pOneEuroValue, 'uCur'), 0)
+      gl.activeTexture(gl.TEXTURE1)
+      gl.bindTexture(gl.TEXTURE_2D, prevVal)
+      gl.uniform1i(gl.getUniformLocation(this.pOneEuroValue, 'uPrevVal'), 1)
+      gl.activeTexture(gl.TEXTURE2)
+      gl.bindTexture(gl.TEXTURE_2D, nextDerivTex)
+      gl.uniform1i(gl.getUniformLocation(this.pOneEuroValue, 'uNewDeriv'), 2)
+      gl.uniform1f(gl.getUniformLocation(this.pOneEuroValue, 'uDt'), dt)
+      gl.uniform1f(gl.getUniformLocation(this.pOneEuroValue, 'uMinCutoff'), minCutoff)
+      gl.uniform1f(gl.getUniformLocation(this.pOneEuroValue, 'uBeta'), beta)
+      gl.uniform1f(gl.getUniformLocation(this.pOneEuroValue, 'uFirstFrame'), firstFrame)
+      this._drawQuad()
+
+      this.oneEuroValFlip   = !this.oneEuroValFlip
+      this.oneEuroDerivFlip = !this.oneEuroDerivFlip
+      this.hasOneEuroState  = true
+      src = nextValTex
     }
 
     return src
@@ -1025,9 +1117,23 @@ export class WebGl2Renderer implements GpuRenderer {
       gl.RED,
       gl.UNSIGNED_BYTE
     )
+    this.oneEuroValA = makeTex(this.procW, this.procH, gl.R8, gl.RED, gl.UNSIGNED_BYTE)
+    this.oneEuroValB = makeTex(this.procW, this.procH, gl.R8, gl.RED, gl.UNSIGNED_BYTE)
+    // Init deriv textures to 128 ≈ 0.5 (encoded zero velocity)
+    const derivInit = new Uint8Array(this.procW * this.procH).fill(128)
+    this.oneEuroDerivA = makeTex(this.procW, this.procH, gl.R8, gl.RED, gl.UNSIGNED_BYTE)
+    gl.bindTexture(gl.TEXTURE_2D, this.oneEuroDerivA)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, this.procW, this.procH, 0, gl.RED, gl.UNSIGNED_BYTE, derivInit)
+    this.oneEuroDerivB = makeTex(this.procW, this.procH, gl.R8, gl.RED, gl.UNSIGNED_BYTE)
+    gl.bindTexture(gl.TEXTURE_2D, this.oneEuroDerivB)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, this.procW, this.procH, 0, gl.RED, gl.UNSIGNED_BYTE, derivInit)
     this.fboMaskA = makeFbo(this.maskA)
     this.fboMaskB = makeFbo(this.maskB)
     this.fboEma = makeFbo(this.emaTex)
+    this.fboOneEuroValA = makeFbo(this.oneEuroValA)
+    this.fboOneEuroValB = makeFbo(this.oneEuroValB)
+    this.fboOneEuroDerivA = makeFbo(this.oneEuroDerivA)
+    this.fboOneEuroDerivB = makeFbo(this.oneEuroDerivB)
 
     // BG half-res buffers (RGBA8)
     this.bgDownTex = makeTex(this.halfW, this.halfH, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE)
@@ -1208,9 +1314,64 @@ void main() {
   fragColor = vec4(mix(bg, fg, t), 1.0);
 }`
 
+    // One-Euro filter — pass 1: smooth the per-pixel velocity (dx̂).
+    // dx̂ is stored as (v / (2*VEL_SCALE) + 0.5) in R8 where VEL_SCALE = 30.0/s.
+    const FS_ONE_EURO_DERIV = `#version 300 es
+precision mediump float;
+in vec2 vUv;
+uniform sampler2D uCur;       // current mask
+uniform sampler2D uPrevVal;   // prev x̂ (R8)
+uniform sampler2D uPrevDeriv; // prev dx̂ encoded (R8)
+uniform float uDt;            // frame delta in seconds
+uniform float uDCutoff;       // derivative low-pass cutoff (Hz)
+uniform float uFirstFrame;    // 1.0 on first call, 0.0 otherwise
+out vec4 fragColor;
+const float VEL_SCALE = 30.0;
+const float TWO_PI = 6.28318530718;
+void main() {
+  if (uFirstFrame > 0.5) { fragColor = vec4(0.5, 0.0, 0.0, 1.0); return; }
+  float x      = texture(uCur,       vUv).r;
+  float prevX  = texture(uPrevVal,   vUv).r;
+  float prevDx = (texture(uPrevDeriv, vUv).r - 0.5) * 2.0 * VEL_SCALE;
+  float dx = (x - prevX) / uDt;
+  float te = TWO_PI * uDCutoff * uDt;
+  float alpha_d = te / (1.0 + te);
+  float dxHat = alpha_d * dx + (1.0 - alpha_d) * prevDx;
+  float encoded = clamp(dxHat / (2.0 * VEL_SCALE) + 0.5, 0.0, 1.0);
+  fragColor = vec4(encoded, 0.0, 0.0, 1.0);
+}`
+
+    // One-Euro filter — pass 2: smooth the mask value (x̂) using the adaptive cutoff.
+    const FS_ONE_EURO_VALUE = `#version 300 es
+precision mediump float;
+in vec2 vUv;
+uniform sampler2D uCur;      // current mask
+uniform sampler2D uPrevVal;  // prev x̂ (R8)
+uniform sampler2D uNewDeriv; // new dx̂ encoded (R8, from deriv pass)
+uniform float uDt;           // frame delta in seconds
+uniform float uMinCutoff;    // minimum cutoff frequency (Hz)
+uniform float uBeta;         // speed coefficient
+uniform float uFirstFrame;   // 1.0 on first call
+out vec4 fragColor;
+const float VEL_SCALE = 30.0;
+const float TWO_PI = 6.28318530718;
+void main() {
+  float x     = texture(uCur,     vUv).r;
+  float prevX = texture(uPrevVal, vUv).r;
+  if (uFirstFrame > 0.5) { fragColor = vec4(x, 0.0, 0.0, 1.0); return; }
+  float dxHat  = (texture(uNewDeriv, vUv).r - 0.5) * 2.0 * VEL_SCALE;
+  float cutoff = uMinCutoff + uBeta * abs(dxHat);
+  float te     = TWO_PI * cutoff * uDt;
+  float alpha  = te / (1.0 + te);
+  float xHat   = alpha * x + (1.0 - alpha) * prevX;
+  fragColor = vec4(xHat, 0.0, 0.0, 1.0);
+}`
+
     this.pUploadMask = this._link(VS, FS_COPY_R)
     this.pSigmoid = this._link(VS, FS_SIGMOID)
     this.pEma = this._link(VS, FS_EMA)
+    this.pOneEuroDeriv = this._link(VS, FS_ONE_EURO_DERIV)
+    this.pOneEuroValue = this._link(VS, FS_ONE_EURO_VALUE)
     this.pCopyR = this._link(VS, FS_COPY_R)
     this.pMaskedDownsample = this._link(VS, FS_MASKED_DOWNSAMPLE)
     this.pMaskWeightedBlur = this._link(VS, FS_MASK_WEIGHTED_BLUR)

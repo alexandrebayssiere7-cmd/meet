@@ -275,7 +275,8 @@
         "title": "Post-processing",
         "sigmoid": "Sigmoid",
         "erosion": "Edge erosion",
-        "ema": "EMA"
+        "ema": "EMA",
+        "oneEuro": "One-Euro Filter"
       },
       "upsampling": {
         "title": "Upsampling",
@@ -288,7 +289,10 @@
         "emaAlpha": "Responsiveness (EMA)",
         "blurRadius": "Blur intensity",
         "upsamplingRadius": "Radius (Guided Filter)",
-        "upsamplingEps": "Regularization (Guided Filter)"
+        "upsamplingEps": "Regularization (Guided Filter)",
+        "oneEuroMinCutoff": "Min cutoff (Hz)",
+        "oneEuroBeta": "Speed coefficient (β)",
+        "oneEuroDCutoff": "Deriv. cutoff (Hz)"
       },
       "apply": "Apply"
     },

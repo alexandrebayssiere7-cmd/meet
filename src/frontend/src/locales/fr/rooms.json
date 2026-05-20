@@ -275,7 +275,8 @@
         "title": "Post-traitement",
         "sigmoid": "Sigmoid",
         "erosion": "Érosion des bords",
-        "ema": "EMA"
+        "ema": "EMA",
+        "oneEuro": "Filtre One-Euro"
       },
       "upsampling": {
         "title": "Suréchantillonnage",
@@ -288,7 +289,10 @@
         "emaAlpha": "Réactivité (EMA)",
         "blurRadius": "Intensité du flou",
         "upsamplingRadius": "Rayon (Guided Filter)",
-        "upsamplingEps": "Régularisation (Guided Filter)"
+        "upsamplingEps": "Régularisation (Guided Filter)",
+        "oneEuroMinCutoff": "Coupure min (Hz)",
+        "oneEuroBeta": "Coefficient de vitesse (β)",
+        "oneEuroDCutoff": "Coupure dérivée (Hz)"
       },
       "apply": "Appliquer"
     },

@@ -243,6 +243,16 @@ export const EffectsConfiguration = ({
   const [closingRadius, setClosingRadius] = useState<number>(
     initialPP.closing?.radius ?? 0
   )
+  const [oneEuroEnabled, setOneEuroEnabled] = useState(!!initialPP.oneEuro)
+  const [oneEuroMinCutoff, setOneEuroMinCutoff] = useState<number>(
+    initialPP.oneEuro?.minCutoff ?? 1.0
+  )
+  const [oneEuroBeta, setOneEuroBeta] = useState<number>(
+    initialPP.oneEuro?.beta ?? 3.0
+  )
+  const [oneEuroDCutoff, setOneEuroDCutoff] = useState<number>(
+    initialPP.oneEuro?.dCutoff ?? 1.0
+  )
 
   // Continuous blur radius slider; only meaningful when a blur effect is selected.
   const initialBlurRadius =
@@ -266,6 +276,8 @@ export const EffectsConfiguration = ({
       cfg.erosion = { pixels: erosionPixels }
     if (emaEnabled) cfg.ema = { alpha: emaAlpha }
     if (closingEnabled) cfg.closing = { radius: closingRadius }
+    if (oneEuroEnabled)
+      cfg.oneEuro = { minCutoff: oneEuroMinCutoff, beta: oneEuroBeta, dCutoff: oneEuroDCutoff }
     return cfg
   }, [
     sigmoidEnabled,
@@ -277,6 +289,10 @@ export const EffectsConfiguration = ({
     emaAlpha,
     closingEnabled,
     closingRadius,
+    oneEuroEnabled,
+    oneEuroMinCutoff,
+    oneEuroBeta,
+    oneEuroDCutoff,
   ])
 
   const buildUpsampling = useCallback((): UpsamplingConfig => {
@@ -1464,6 +1480,51 @@ export const EffectsConfiguration = ({
                     step={1}
                     disabled={!closingEnabled}
                     onChange={setClosingRadius}
+                  />
+                  <label
+                    className={css({
+                      display: 'flex',
+                      gap: '0.4rem',
+                      alignItems: 'center',
+                      cursor: 'pointer',
+                    })}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={oneEuroEnabled}
+                      onChange={(e) => setOneEuroEnabled(e.target.checked)}
+                    />
+                    <Text variant="sm">{t('advanced.postProcessing.oneEuro')}</Text>
+                  </label>
+                  <SliderRow
+                    label={t('advanced.params.oneEuroMinCutoff')}
+                    displayValue={oneEuroMinCutoff.toFixed(1)}
+                    value={oneEuroMinCutoff}
+                    min={0.1}
+                    max={5.0}
+                    step={0.1}
+                    disabled={!oneEuroEnabled}
+                    onChange={setOneEuroMinCutoff}
+                  />
+                  <SliderRow
+                    label={t('advanced.params.oneEuroBeta')}
+                    displayValue={oneEuroBeta.toFixed(1)}
+                    value={oneEuroBeta}
+                    min={0.0}
+                    max={20.0}
+                    step={0.5}
+                    disabled={!oneEuroEnabled}
+                    onChange={setOneEuroBeta}
+                  />
+                  <SliderRow
+                    label={t('advanced.params.oneEuroDCutoff')}
+                    displayValue={oneEuroDCutoff.toFixed(1)}
+                    value={oneEuroDCutoff}
+                    min={0.1}
+                    max={5.0}
+                    step={0.1}
+                    disabled={!oneEuroEnabled}
+                    onChange={setOneEuroDCutoff}
                   />
                 </div>
                 <H

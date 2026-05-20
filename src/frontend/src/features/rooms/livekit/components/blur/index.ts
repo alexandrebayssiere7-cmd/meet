@@ -22,6 +22,7 @@ export type PostProcessingConfig = {
   erosion?: { pixels: number }
   closing?: { radius: number }
   ema?: { alpha: number }
+  oneEuro?: { minCutoff: number; beta: number; dCutoff: number }
 }
 
 export type UpsamplingConfig = {

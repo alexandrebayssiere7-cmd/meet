@@ -275,7 +275,8 @@
         "title": "Nachbearbeitung",
         "sigmoid": "Sigmoid",
         "erosion": "Kantenerosion",
-        "ema": "EMA"
+        "ema": "EMA",
+        "oneEuro": "One-Euro-Filter"
       },
       "upsampling": {
         "title": "Hochskalierung",
@@ -288,7 +289,10 @@
         "emaAlpha": "Reaktivität (EMA)",
         "blurRadius": "Unschärfe-Intensität",
         "upsamplingRadius": "Radius (Guided Filter)",
-        "upsamplingEps": "Regularisierung (Guided Filter)"
+        "upsamplingEps": "Regularisierung (Guided Filter)",
+        "oneEuroMinCutoff": "Min. Grenzfrequenz (Hz)",
+        "oneEuroBeta": "Geschwindigkeitskoeffizient (β)",
+        "oneEuroDCutoff": "Ableitungs-Grenzfrequenz (Hz)"
       },
       "apply": "Anwenden"
     },

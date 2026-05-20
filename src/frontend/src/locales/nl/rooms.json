@@ -275,7 +275,8 @@
         "title": "Nabewerking",
         "sigmoid": "Sigmoid",
         "erosion": "Randerosie",
-        "ema": "EMA"
+        "ema": "EMA",
+        "oneEuro": "One-Euro Filter"
       },
       "upsampling": {
         "title": "Opschaling",
@@ -288,7 +289,10 @@
         "emaAlpha": "Reactiviteit (EMA)",
         "blurRadius": "Vervaging-intensiteit",
         "upsamplingRadius": "Straal (Guided Filter)",
-        "upsamplingEps": "Regularisatie (Guided Filter)"
+        "upsamplingEps": "Regularisatie (Guided Filter)",
+        "oneEuroMinCutoff": "Min. afsnijfrequentie (Hz)",
+        "oneEuroBeta": "Snelheidscoëfficiënt (β)",
+        "oneEuroDCutoff": "Afgeleid. afsnijfreq. (Hz)"
       },
       "apply": "Toepassen"
     },
