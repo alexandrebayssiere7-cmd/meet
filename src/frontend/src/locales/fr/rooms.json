@@ -267,6 +267,9 @@
         "manual": "Downsample ratio manuel",
         "label": "Downsample ratio (RVM)"
       },
+      "sync": {
+        "title": "Synchronisation masque / frame"
+      },
       "preProcessing": {
         "title": "Pré-traitement",
         "roiCropping": "Recadrage sur la personne (ROI)"
@@ -288,7 +291,9 @@
         "emaAlpha": "Réactivité (EMA)",
         "blurRadius": "Intensité du flou",
         "upsamplingRadius": "Rayon (Guided Filter)",
-        "upsamplingEps": "Régularisation (Guided Filter)"
+        "upsamplingEps": "Régularisation (Guided Filter)",
+        "maxFrameOffset": "Décalage max masque / frame (frames)",
+        "maxFrameOffsetStrict": "verrouillé"
       },
       "apply": "Appliquer"
     },
