@@ -350,6 +350,17 @@
         }
       }
     },
+    "stats": {
+      "title": "Matting diagnostics",
+      "activeModel": "Active model",
+      "captureLatency": "Capture → display latency",
+      "maskGap": "Mask → rendered frame gap",
+      "inference": "Segmenter inference",
+      "fps": "FPS",
+      "fpsRender": "render",
+      "fpsSegmenter": "segmenter",
+      "windowAvg": "avg of last {{n}}"
+    },
     "matting": {
       "errors": {
         "MEDIAPIPE_INIT_FAILED": "The segmentation model could not be loaded. Please check your internet connection.",

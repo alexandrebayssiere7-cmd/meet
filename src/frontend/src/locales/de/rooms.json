@@ -351,6 +351,17 @@
       }
     },
 
+    "stats": {
+      "title": "Matting-Diagnose",
+      "activeModel": "Aktives Modell",
+      "captureLatency": "Latenz Aufnahme → Anzeige",
+      "maskGap": "Abstand Maske → angezeigtes Bild",
+      "inference": "Segmenter-Inferenz",
+      "fps": "FPS",
+      "fpsRender": "Anzeige",
+      "fpsSegmenter": "Segmenter",
+      "windowAvg": "Ø der letzten {{n}}"
+    },
     "matting": {
       "errors": {
         "MEDIAPIPE_INIT_FAILED": "Das Segmentierungsmodell konnte nicht geladen werden. Bitte überprüfen Sie Ihre Internetverbindung.",

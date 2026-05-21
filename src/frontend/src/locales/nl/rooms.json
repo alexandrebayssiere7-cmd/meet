@@ -350,6 +350,17 @@
         }
       }
     },
+    "stats": {
+      "title": "Matting-diagnostiek",
+      "activeModel": "Actief model",
+      "captureLatency": "Latentie opname → scherm",
+      "maskGap": "Verschil masker → weergegeven beeld",
+      "inference": "Segmenter-inferentie",
+      "fps": "FPS",
+      "fpsRender": "weergave",
+      "fpsSegmenter": "segmenter",
+      "windowAvg": "gem. over {{n}}"
+    },
     "matting": {
       "errors": {
         "MEDIAPIPE_INIT_FAILED": "Het segmentatiemodel kon niet worden geladen. Controleer uw internetverbinding.",

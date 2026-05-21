@@ -13,6 +13,16 @@ import { BBox } from './preprocessing/RoiCropper'
 import { Segmenter, createSegmenter, RVMSegmenter, probeMediapipeDelegate } from './segmenters'
 import { WebGl2Renderer } from './renderers/WebGl2Renderer'
 import { pushMattingError } from './errors/MattingErrorStore'
+import {
+  pushGapSample,
+  pushInferenceSample,
+  pushLatencySample,
+  resetMattingStats,
+  setMattingStatsActive,
+  setMattingStatsModel,
+  tickRenderFrame,
+  tickSegmenterFrame,
+} from './stats/MattingStatsStore'
 
 const SEGMENTATION_MASK_CANVAS_ID = 'background-blur-local-segmentation'
 const BLUR_CANVAS_ID = 'background-blur-local'
@@ -27,8 +37,19 @@ interface FrameMaskPair {
   mask: Float32Array
   source: ImageBitmap
   captureTime: number
+  // Approx. moment the camera shutter captured this frame (DOMHighResTimeStamp,
+  // same clock as performance.now()). Sourced from rVFC metadata.captureTime
+  // when supported; falls back to `captureTime` (snapshot time) otherwise.
+  cameraCaptureTime: number
   procW: number
   procH: number
+}
+
+interface VideoFrameMeta {
+  captureTime: number
+  presentationTime: number
+  mediaTime: number
+  receivedAt: number
 }
 
 /**
@@ -81,6 +102,12 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
   private _segLoopActive = false
   private _latestPair: FrameMaskPair | null = null
   private _renderLoopHandle: number | null = null
+  // Last frame metadata delivered by requestVideoFrameCallback on the source
+  // <video>. Used to derive end-to-end capture→display latency. When the API
+  // isn't supported (older Firefox/Safari), this stays undefined and the stats
+  // fall back to snapshot-time approximation.
+  private _latestVideoFrameMeta?: VideoFrameMeta
+  private _rvfcHandle: number | null = null
   // Max allowed offset (in frames @ 30fps) between the frame that produced the
   // mask and the frame the mask is applied to. 0 = strict frame-lock (no halo,
   // ~inference-time latency). Higher = lower latency, halo bounded by N frames.
@@ -510,6 +537,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
 
       this.segmenter = seg
       this.currentModel = targetModel
+      setMattingStatsModel(model, targetModel)
       this.processingWidth = seg.inputSize.width
       this.processingHeight = seg.inputSize.height
       this._resizeMaskIfNeeded()
@@ -518,6 +546,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       if (!this._destroyed && this._pendingModel === model) {
         console.error('[AMP] segmenter init failed — running in passthrough mode', e)
         this.segmenter = undefined
+        setMattingStatsModel(model, null)
         this._resolveReady()
       }
     }
@@ -569,6 +598,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       const old = this.segmenter
       this.segmenter = seg
       this.currentModel = targetModel
+      setMattingStatsModel(model, targetModel)
       this.processingWidth = seg.inputSize.width
       this.processingHeight = seg.inputSize.height
       old?.destroy()
@@ -636,8 +666,61 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     if (this._destroyed) return
     this.videoElementLoaded = true
     this._segLoopActive = true
+    this._startVideoFrameMetaTracking()
+    setMattingStatsActive(true)
     this._runSegmenterLoop()   // fire-and-forget
     this._scheduleRender()
+  }
+
+  /**
+   * Subscribe to requestVideoFrameCallback on the source <video> to keep a
+   * fresh frame metadata snapshot (capture/presentation/media times). Used
+   * by the stats pipeline to compute end-to-end capture→display latency.
+   * Silently no-op when the browser doesn't expose the API.
+   */
+  private _startVideoFrameMetaTracking(): void {
+    const video = this.videoElement
+    if (!video) return
+    const anyVideo = video as unknown as {
+      requestVideoFrameCallback?: (
+        cb: (now: number, meta: {
+          captureTime?: number
+          presentationTime: number
+          mediaTime: number
+          expectedDisplayTime?: number
+        }) => void
+      ) => number
+      cancelVideoFrameCallback?: (handle: number) => void
+    }
+    if (typeof anyVideo.requestVideoFrameCallback !== 'function') return
+    const tick = (now: number, meta: {
+      captureTime?: number
+      presentationTime: number
+      mediaTime: number
+    }) => {
+      if (this._destroyed || !this._segLoopActive) return
+      this._latestVideoFrameMeta = {
+        captureTime: typeof meta.captureTime === 'number' ? meta.captureTime : now,
+        presentationTime: meta.presentationTime,
+        mediaTime: meta.mediaTime,
+        receivedAt: performance.now(),
+      }
+      this._rvfcHandle = anyVideo.requestVideoFrameCallback!(tick)
+    }
+    this._rvfcHandle = anyVideo.requestVideoFrameCallback(tick)
+  }
+
+  private _stopVideoFrameMetaTracking(): void {
+    const video = this.videoElement
+    if (!video || this._rvfcHandle === null) return
+    const anyVideo = video as unknown as {
+      cancelVideoFrameCallback?: (handle: number) => void
+    }
+    try {
+      anyVideo.cancelVideoFrameCallback?.(this._rvfcHandle)
+    } catch { /* best-effort */ }
+    this._rvfcHandle = null
+    this._latestVideoFrameMeta = undefined
   }
 
   /**
@@ -668,6 +751,9 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
           await new Promise<void>(r => setTimeout(r, TARGET_MS))
           continue
         }
+        // Record the camera shutter time for this snapshot, derived from the
+        // last rVFC tick. Fallback: the snapshot wall-clock t0.
+        const cameraCaptureTime = this._latestVideoFrameMeta?.captureTime ?? t0
         this.sizeSource(snapshot, cropBbox)
         // Pre-flip the bitmap on Y; the renderer disables UNPACK_FLIP_Y_WEBGL
         // for ImageBitmap uploads. The flip is moved into the bitmap because
@@ -682,7 +768,10 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
         const frameToSegment = this._preProcessingPipeline
           ? this._preProcessingPipeline.apply(this.sourceImageData!, this._lastMask)
           : this.sourceImageData!
-        const rawMask = await seg.segment(frameToSegment, performance.now())
+        const inferStart = performance.now()
+        const rawMask = await seg.segment(frameToSegment, inferStart)
+        pushInferenceSample(performance.now() - inferStart)
+        tickSegmenterFrame()
         if (!this._segLoopActive) {
           capturedSource.close()
           return
@@ -702,6 +791,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
             mask,
             source: capturedSource,
             captureTime: t0,
+            cameraCaptureTime,
             procW: this.processingWidth,
             procH: this.processingHeight,
           }
@@ -795,6 +885,17 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       }
       this.gpuRenderer.render(pair.source)
     }
+
+    // Stats: capture→display latency = wall clock - camera shutter time of
+    // the frame we are actually displaying. Mask→applied gap = camera time
+    // delta between the frame that produced the mask and the displayed frame.
+    const now = performance.now()
+    const appliedCameraTime = useLive
+      ? (this._latestVideoFrameMeta?.captureTime ?? now)
+      : pair.cameraCaptureTime
+    pushLatencySample(now - appliedCameraTime)
+    pushGapSample(Math.max(0, appliedCameraTime - pair.cameraCaptureTime))
+    tickRenderFrame()
   }
 
   // ────────────────────────────────────────────────────────────────────────────
@@ -921,6 +1022,8 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     this._configuredModel = undefined
     this._segLoopActive = false
     this._cancelRender()
+    this._stopVideoFrameMetaTracking()
+    resetMattingStats()
     if (this.videoElement) {
       this.videoElement.onloadeddata = null
     }

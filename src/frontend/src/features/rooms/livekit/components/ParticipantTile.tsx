@@ -34,6 +34,7 @@ import { useTranslation } from 'react-i18next'
 import { getShortcutDescriptorById } from '@/features/shortcuts/catalog'
 import { formatShortcutLabel } from '@/features/shortcuts/formatLabels'
 import { KeyboardShortcutHint } from './KeyboardShortcutHint'
+import { MattingHud } from './blur/MattingHud'
 
 export function TrackRefContextIfNeeded(
   props: React.PropsWithChildren<{
@@ -237,6 +238,8 @@ export const ParticipantTile: (
               hasKeyboardFocus={hasKeyboardFocus}
             />
           )}
+          {trackReference.participant.isLocal &&
+            trackReference.source === Track.Source.Camera && <MattingHud />}
         </ParticipantContextIfNeeded>
       </TrackRefContextIfNeeded>
       <KeyboardShortcutHint>

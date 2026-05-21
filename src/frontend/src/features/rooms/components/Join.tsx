@@ -39,6 +39,7 @@ import { useResolveInitiallyDefaultDeviceId } from '../livekit/hooks/useResolveI
 import { isSafari } from '@/utils/livekit'
 import type { LocalUserChoices } from '@/stores/userChoices'
 import { useCannotUseDevice } from '../livekit/hooks/useCannotUseDevice'
+import { MattingHud } from '../livekit/components/blur/MattingHud'
 
 const onError = (e: Error) => console.error('ERROR', e)
 
@@ -638,6 +639,7 @@ export const Join = ({
                       </Button>
                     )}
                   </div>
+                  <MattingHud />
                 </div>
                 <div
                   className={css({

@@ -350,6 +350,17 @@
         }
       }
     },
+    "stats": {
+      "title": "Diagnostics matting",
+      "activeModel": "Modèle actif",
+      "captureLatency": "Latence capture → écran",
+      "maskGap": "Écart masque → frame affichée",
+      "inference": "Inférence segmenter",
+      "fps": "FPS",
+      "fpsRender": "rendu",
+      "fpsSegmenter": "segmenter",
+      "windowAvg": "moy. sur {{n}}"
+    },
     "matting": {
       "errors": {
         "MEDIAPIPE_INIT_FAILED": "Le modèle de segmentation n'a pas pu être chargé. Vérifiez votre connexion internet.",

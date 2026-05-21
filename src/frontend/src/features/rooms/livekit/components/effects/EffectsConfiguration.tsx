@@ -38,6 +38,7 @@ import { usePersistentUserChoices } from '@/features/rooms/livekit/hooks/usePers
 import { proxy, useSnapshot } from 'valtio'
 import { Spinner } from '@/primitives/Spinner.tsx'
 import { useMattingErrors } from '../blur/errors/MattingErrorStore'
+import { useMattingStats } from '../blur/stats/MattingStatsStore'
 
 enum BlurRadius {
   NONE = 0,
@@ -142,6 +143,74 @@ const SliderRow = ({
     />
   </label>
 )
+
+const modelLabel = (m: SegmentationModel | null): string => {
+  switch (m) {
+    case SegmentationModel.LANDSCAPE: return 'Landscape'
+    case SegmentationModel.MULTICLASS: return 'Multiclass'
+    case SegmentationModel.RVM: return 'RVM'
+    case SegmentationModel.AUTO: return 'Auto'
+    default: return '—'
+  }
+}
+
+const MattingDiagnostics = () => {
+  const { t } = useTranslation('rooms')
+  const stats = useMattingStats()
+  if (!stats.active) return null
+  const showActive = stats.configuredModel === SegmentationModel.AUTO
+  return (
+    <div
+      className={css({
+        marginBottom: '1rem',
+        padding: '0.6rem 0.75rem',
+        backgroundColor: 'greyscale.50',
+        borderRadius: '4px',
+        border: '1px solid greyscale.250',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '0.2rem',
+      })}
+    >
+      <Text
+        variant="bodyXsBold"
+        className={css({ marginBottom: '0.15rem' })}
+      >
+        {t('effects.stats.title', 'Diagnostics matting')}
+      </Text>
+      {showActive && (
+        <Text variant="sm">
+          {t('effects.stats.activeModel', 'Active model')} :{' '}
+          <strong>{modelLabel(stats.currentModel)}</strong>
+        </Text>
+      )}
+      <Text variant="sm">
+        {t('effects.stats.captureLatency', 'Capture→display latency')} :{' '}
+        <strong>{stats.captureToDisplayLatencyMs.toFixed(1)} ms</strong>
+      </Text>
+      <Text variant="sm">
+        {t('effects.stats.maskGap', 'Mask→render gap')} :{' '}
+        <strong>{stats.maskFrameGapMs.toFixed(1)} ms</strong>{' '}
+        <span className={css({ color: 'greyscale.500' })}>
+          ({t('effects.stats.windowAvg', 'avg of last {{n}}', { n: stats.samples })})
+        </span>
+      </Text>
+      <Text variant="sm">
+        {t('effects.stats.inference', 'Segmenter inference')} :{' '}
+        <strong>{stats.segmenterInferenceMs.toFixed(1)} ms</strong>
+      </Text>
+      <Text variant="sm">
+        {t('effects.stats.fps', 'FPS')} :{' '}
+        <strong>{stats.renderFps.toFixed(1)}</strong>{' '}
+        <span className={css({ color: 'greyscale.500' })}>
+          ({t('effects.stats.fpsRender', 'render')}) ·{' '}
+          <strong>{stats.segmenterFps.toFixed(1)}</strong>{' '}
+          ({t('effects.stats.fpsSegmenter', 'segmenter')})
+        </span>
+      </Text>
+    </div>
+  )
+}
 
 // We use a valtio store so that the state is persisted between the join room
 // and the actual room
@@ -1278,6 +1347,8 @@ export const EffectsConfiguration = ({
                     <Text variant="sm">{t('advanced.model.rvm')}</Text>
                   </label>
                 </div>
+
+                <MattingDiagnostics />
 
                 {model === SegmentationModel.RVM && (
                   <div
