@@ -7,7 +7,6 @@ const MOTION_DIFF_THRESHOLD = 25
 const MOTION_PIXEL_RATIO = 1 / 16
 const MOTION_CHECK_INTERVAL = 30
 const EXPANSION_COOLDOWN_FRAMES = 30
-const PERIODIC_FULLFRAME_INTERVAL = 300
 
 export interface BBox {
   x: number      // normalised left edge [0, 1]
@@ -142,12 +141,6 @@ export class RoiCropper {
     rgbaH?: number
   ): BBox {
     this.frameCounter++
-
-    if (this.frameCounter % PERIODIC_FULLFRAME_INTERVAL === 0) {
-      this._updatePrevLuma(currentRgba, rgbaW, rgbaH)
-      this.cooldownFrames = EXPANSION_COOLDOWN_FRAMES
-      return { ...FULL_FRAME }
-    }
 
     if (this.cooldownFrames > 0) {
       this.cooldownFrames--
