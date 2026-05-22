@@ -1,5 +1,5 @@
 import { proxy, useSnapshot } from 'valtio'
-import { SegmentationModel } from '..'
+import { MaskBlendMode, SegmentationModel } from '..'
 
 /**
  * Live stats published by the matting processor for diagnostic UI (HUD +
@@ -27,6 +27,10 @@ export interface MattingStatsState {
   cameraFps: number
   cameraSettings: CameraSettings | null
   samples: number
+  motionScoreUvPerSec: number
+  effectiveLatencyMode: MaskBlendMode | null
+  maskOffsetUv: { u: number; v: number }
+  predictionActive: boolean
 }
 
 export const mattingStatsStore = proxy<MattingStatsState>({
@@ -41,6 +45,10 @@ export const mattingStatsStore = proxy<MattingStatsState>({
   cameraFps: 0,
   cameraSettings: null,
   samples: 0,
+  motionScoreUvPerSec: 0,
+  effectiveLatencyMode: null,
+  maskOffsetUv: { u: 0, v: 0 },
+  predictionActive: false,
 })
 
 const BUF_SIZE = 50
@@ -192,6 +200,25 @@ export function setCameraSettings(settings: CameraSettings): void {
   mattingStatsStore.cameraSettings = settings
 }
 
+export function setMotionScore(uvPerSec: number): void {
+  mattingStatsStore.motionScoreUvPerSec = Number.isFinite(uvPerSec) ? uvPerSec : 0
+}
+
+export function setEffectiveLatencyMode(mode: MaskBlendMode | null): void {
+  mattingStatsStore.effectiveLatencyMode = mode
+}
+
+export function setMaskOffset(u: number, v: number): void {
+  mattingStatsStore.maskOffsetUv = {
+    u: Number.isFinite(u) ? u : 0,
+    v: Number.isFinite(v) ? v : 0,
+  }
+}
+
+export function setPredictionActive(active: boolean): void {
+  mattingStatsStore.predictionActive = active
+}
+
 export function resetMattingStats(): void {
   latencyBuf.reset()
   gapBuf.reset()
@@ -205,6 +232,10 @@ export function resetMattingStats(): void {
   mattingStatsStore.segmenterInferenceMs = 0
   mattingStatsStore.cameraSettings = null
   mattingStatsStore.samples = 0
+  mattingStatsStore.motionScoreUvPerSec = 0
+  mattingStatsStore.effectiveLatencyMode = null
+  mattingStatsStore.maskOffsetUv = { u: 0, v: 0 }
+  mattingStatsStore.predictionActive = false
   lastFlush = 0
   pendingFlush = false
 }

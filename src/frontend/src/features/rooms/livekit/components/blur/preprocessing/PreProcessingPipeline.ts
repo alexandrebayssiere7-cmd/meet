@@ -72,4 +72,11 @@ export class PreProcessingPipeline {
   reset(): void {
     this.roiCropper?.reset()
   }
+
+  /** Returns the latest stabilised person bbox, or null when no mask has been
+   *  processed yet or ROI cropping is disabled. */
+  getCurrentBbox(): BBox | null {
+    if (!this.roiCropper || !this.roiCropper.isInitialised()) return null
+    return this.roiCropper.getCurrentBbox()
+  }
 }

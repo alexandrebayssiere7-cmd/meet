@@ -72,6 +72,15 @@ export const MattingHud = ({ alwaysVisible = false }: MattingHudProps) => {
       <div>
         cam {stats.cameraFps.toFixed(0)} · r {stats.renderFps.toFixed(0)} · s {stats.segmenterFps.toFixed(0)} fps
       </div>
+      {stats.effectiveLatencyMode !== null && (
+        <div>
+          mode {stats.effectiveLatencyMode}
+          {stats.predictionActive ? ' · pred' : ''}
+        </div>
+      )}
+      {stats.effectiveLatencyMode !== null && (
+        <div>motion {stats.motionScoreUvPerSec.toFixed(2)}</div>
+      )}
     </div>
   )
 }

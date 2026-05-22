@@ -292,8 +292,24 @@
         "blurRadius": "Blur intensity",
         "upsamplingRadius": "Radius (Guided Filter)",
         "upsamplingEps": "Regularization (Guided Filter)",
-        "maxFrameOffset": "Max mask / frame offset (frames)",
-        "maxFrameOffsetStrict": "locked"
+        "latencyAuto": "Auto (adapt to motion)",
+        "maskPrediction": "Mask prediction (advanced)",
+        "latencyMode": "Halo / latency trade-off",
+        "latencyModeValue": {
+          "0": "Locked",
+          "1": "Stable",
+          "2": "Balanced",
+          "3": "Responsive",
+          "4": "Live"
+        },
+        "effectiveModeLabelPrefix": "Active mode",
+        "effectiveModeLabel": {
+          "frameLock": "Locked",
+          "blend": "Blended",
+          "live": "Live"
+        },
+        "motionScoreLabel": "Motion",
+        "enableRoiHint": "Enable subject tracking (ROI) to use these options."
       },
       "apply": "Apply"
     },

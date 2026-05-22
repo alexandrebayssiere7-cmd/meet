@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import {
   BackgroundProcessorFactory,
   BackgroundProcessorInterface,
+  LatencyMode,
   PostProcessingConfig,
   PreProcessingConfig,
   UpsamplingConfig,
@@ -230,6 +231,35 @@ const MattingDiagnostics = () => {
   )
 }
 
+/**
+ * Inline readout shown under the latency slider when auto mode is on.
+ * Pulls the resolved effective mode + motion score from the matting stats
+ * store so the user can see what auto is doing in real time.
+ */
+const LatencyAutoReadout = () => {
+  const { t } = useTranslation('rooms')
+  const stats = useMattingStats()
+  if (!stats.active) return null
+  const modeLabel = stats.effectiveLatencyMode
+    ? t(`advanced.params.effectiveModeLabel.${stats.effectiveLatencyMode}`)
+    : '—'
+  return (
+    <Text
+      variant="sm"
+      className={css({
+        paddingLeft: '1.4rem',
+        opacity: 0.75,
+        fontStyle: 'italic',
+      })}
+    >
+      {t('advanced.params.effectiveModeLabelPrefix')} : <strong>{modeLabel}</strong>
+      {' · '}
+      {t('advanced.params.motionScoreLabel')} :{' '}
+      <strong>{stats.motionScoreUvPerSec.toFixed(2)}</strong> uv/s
+    </Text>
+  )
+}
+
 // We use a valtio store so that the state is persisted between the join room
 // and the actual room
 const uploadNotPossibleLocalState = proxy({
@@ -330,14 +360,23 @@ export const EffectsConfiguration = ({
   const [closingRadius, setClosingRadius] = useState<number>(
     initialPP.closing?.radius ?? 0
   )
-  const initialMaxFrameOffset: number =
-    (processorConfig &&
-      (processorConfig.type === ProcessorType.BLUR ||
-        processorConfig.type === ProcessorType.VIRTUAL) &&
-      processorConfig.maxFrameOffset) ||
-    0
-  const [maxFrameOffset, setMaxFrameOffset] =
-    useState<number>(initialMaxFrameOffset)
+  const isBlurOrVirtual =
+    processorConfig?.type === ProcessorType.BLUR ||
+    processorConfig?.type === ProcessorType.VIRTUAL
+  const initialLatencyMode: LatencyMode =
+    isBlurOrVirtual && typeof processorConfig.latencyMode === 'number'
+      ? (processorConfig.latencyMode as LatencyMode)
+      : 2
+  const initialLatencyAuto: boolean =
+    isBlurOrVirtual ? processorConfig.latencyAuto !== false : true
+  const initialMaskPrediction: boolean =
+    isBlurOrVirtual ? processorConfig.maskPrediction === true : false
+  const [latencyMode, setLatencyMode] =
+    useState<LatencyMode>(initialLatencyMode)
+  const [latencyAuto, setLatencyAuto] = useState<boolean>(initialLatencyAuto)
+  const [maskPrediction, setMaskPrediction] = useState<boolean>(
+    initialMaskPrediction
+  )
 
   // Continuous blur radius slider; only meaningful when a blur effect is selected.
   const initialBlurRadius =
@@ -399,12 +438,24 @@ export const EffectsConfiguration = ({
               : undefined,
           postProcessing: buildPostProcessing(),
           upsampling: buildUpsampling(),
-          maxFrameOffset,
+          latencyMode,
+          latencyAuto,
+          maskPrediction,
         }
       }
       return config
     },
-    [model, buildPreProcessing, rvmManual, rvmRatio, buildPostProcessing, buildUpsampling, maxFrameOffset]
+    [
+      model,
+      buildPreProcessing,
+      rvmManual,
+      rvmRatio,
+      buildPostProcessing,
+      buildUpsampling,
+      latencyMode,
+      latencyAuto,
+      maskPrediction,
+    ]
   )
 
   const selectedId = useMemo(
@@ -1422,19 +1473,71 @@ export const EffectsConfiguration = ({
                     marginBottom: '1rem',
                   })}
                 >
+                  <label
+                    className={css({
+                      display: 'flex',
+                      gap: '0.4rem',
+                      alignItems: 'center',
+                      cursor: 'pointer',
+                    })}
+                    style={{ opacity: roiCroppingEnabled ? 1 : 0.5 }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={latencyAuto && roiCroppingEnabled}
+                      disabled={!roiCroppingEnabled}
+                      onChange={(e) => setLatencyAuto(e.target.checked)}
+                    />
+                    <Text variant="sm">
+                      {t('advanced.params.latencyAuto')}
+                    </Text>
+                  </label>
+                  <label
+                    className={css({
+                      display: 'flex',
+                      gap: '0.4rem',
+                      alignItems: 'center',
+                      cursor: 'pointer',
+                    })}
+                    style={{ opacity: roiCroppingEnabled ? 1 : 0.5 }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={maskPrediction && roiCroppingEnabled}
+                      disabled={!roiCroppingEnabled}
+                      onChange={(e) => setMaskPrediction(e.target.checked)}
+                    />
+                    <Text variant="sm">
+                      {t('advanced.params.maskPrediction')}
+                    </Text>
+                  </label>
                   <SliderRow
-                    label={t('advanced.params.maxFrameOffset')}
-                    displayValue={
-                      maxFrameOffset === 0
-                        ? t('advanced.params.maxFrameOffsetStrict')
-                        : `${maxFrameOffset}`
-                    }
-                    value={maxFrameOffset}
+                    label={t('advanced.params.latencyMode')}
+                    displayValue={t(
+                      `advanced.params.latencyModeValue.${latencyMode}` as const
+                    )}
+                    value={latencyMode}
                     min={0}
-                    max={10}
+                    max={4}
                     step={1}
-                    onChange={setMaxFrameOffset}
+                    disabled={latencyAuto || !roiCroppingEnabled}
+                    onChange={(v) => setLatencyMode(v as LatencyMode)}
                   />
+                  {!roiCroppingEnabled && (
+                    <Text
+                      variant="sm"
+                      className={css({
+                        paddingLeft: '1.4rem',
+                        opacity: 0.7,
+                        fontStyle: 'italic',
+                      })}
+                    >
+                      {t('advanced.params.enableRoiHint')}
+                    </Text>
+                  )}
+                  {roiCroppingEnabled && latencyAuto && (
+                    <LatencyAutoReadout />
+                  )}
                 </div>
 
                 <H

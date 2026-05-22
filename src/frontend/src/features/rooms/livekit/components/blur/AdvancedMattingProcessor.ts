@@ -1,6 +1,8 @@
 import { ProcessorOptions, Track } from 'livekit-client'
 import {
   BackgroundProcessorInterface,
+  LatencyMode,
+  MaskBlendMode,
   ProcessorConfig,
   ProcessorType,
   SegmentationModel,
@@ -9,6 +11,7 @@ import {
   PreProcessingConfig,
 } from '.'
 import { PreProcessingPipeline } from './preprocessing/PreProcessingPipeline'
+import { MaskMotionTracker } from './preprocessing/MaskMotionTracker'
 import { BBox } from './preprocessing/RoiCropper'
 import { Segmenter, createSegmenter, RVMSegmenter, probeMediapipeDelegate } from './segmenters'
 import { WebGl2Renderer } from './renderers/WebGl2Renderer'
@@ -19,8 +22,12 @@ import {
   pushLatencySample,
   resetMattingStats,
   setCameraSettings,
+  setEffectiveLatencyMode,
+  setMaskOffset,
   setMattingStatsActive,
   setMattingStatsModel,
+  setMotionScore,
+  setPredictionActive,
   tickCameraFrame,
   tickRenderFrame,
   tickSegmenterFrame,
@@ -29,6 +36,46 @@ import {
 const SEGMENTATION_MASK_CANVAS_ID = 'background-blur-local-segmentation'
 const BLUR_CANVAS_ID = 'background-blur-local'
 const DEFAULT_BLUR = 10
+const DEFAULT_LATENCY_MODE: LatencyMode = 2
+
+// Auto-tuning thresholds for the latency/halo trade-off (uv per second).
+// Hysteresis prevents the mode from flapping between frameLock/blend/live at
+// the boundaries. Tweak these if the auto mode feels jittery in real use.
+const AUTO_LOCK_THRESHOLD = 0.10
+const AUTO_LIVE_THRESHOLD = 0.60
+const AUTO_HYSTERESIS = 0.05
+// When Prediction is opted-in, the user has explicitly accepted the halo
+// trade-off in exchange for lower latency. We then bias the auto-tuner toward
+// the live side: never stay fully frame-locked, and use a non-zero blend
+// baseline even at zero motion (the prediction warp is a no-op then anyway).
+const AUTO_PRED_BLEND_BASELINE = 0.5
+
+// Hard caps for the mask warp prediction so a noisy velocity never produces
+// visible halos. 0.08 uv ≈ 8% of the frame width.
+const MAX_PREDICTION_OFFSET_UV = 0.08
+// Frame-budget used to size the blend cross-fade ramp at mode "Équilibré".
+const FRAME_MS = 1000 / 30
+const BLEND_MODE_MAX_AGE_MS = FRAME_MS * 4
+
+function clamp01(v: number): number {
+  return v < 0 ? 0 : v > 1 ? 1 : v
+}
+
+function clampOffset(v: number): number {
+  if (v > MAX_PREDICTION_OFFSET_UV) return MAX_PREDICTION_OFFSET_UV
+  if (v < -MAX_PREDICTION_OFFSET_UV) return -MAX_PREDICTION_OFFSET_UV
+  return v
+}
+
+// Mapping from the user-facing LatencyMode (0..4) to the internal effective
+// blend mode + prediction gain. Used when `latencyAuto` is false.
+const STATIC_MODE_TABLE: ReadonlyArray<{ mode: MaskBlendMode; predictionGain: number }> = [
+  { mode: 'frameLock', predictionGain: 0 },   // 0 Lock
+  { mode: 'frameLock', predictionGain: 0 },   // 1 Stable (handled separately by EMA boost)
+  { mode: 'blend',     predictionGain: 0 },   // 2 Équilibré
+  { mode: 'live',      predictionGain: 0.5 }, // 3 Réactif
+  { mode: 'live',      predictionGain: 1.0 }, // 4 Live
+]
 
 /**
  * Pair of mask + the exact source frame that produced it. Stored together to
@@ -110,10 +157,33 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
   // fall back to snapshot-time approximation.
   private _latestVideoFrameMeta?: VideoFrameMeta
   private _rvfcHandle: number | null = null
-  // Max allowed offset (in frames @ 30fps) between the frame that produced the
-  // mask and the frame the mask is applied to. 0 = strict frame-lock (no halo,
-  // ~inference-time latency). Higher = lower latency, halo bounded by N frames.
-  private _maxFrameOffset = 0
+  // Monotonic counter of rVFC ticks on the source <video>. The segmenter loop
+  // reads this to drive its frame-skip logic (run inference once every N
+  // camera frames) and to wake on actual camera ticks rather than a fixed
+  // timer. Only meaningful when rVFC is available.
+  private _videoFrameSeq = 0
+  // One-shot promise resolved by the rVFC tick to wake the segmenter loop.
+  // Recreated lazily on each await so multiple ticks between two awaits don't
+  // queue spurious wakes.
+  private _frameAwaiter: { promise: Promise<void>; resolve: () => void } | null = null
+  // Last `_videoFrameSeq` value that produced an inference, used by the
+  // frame-skip gate. Init to -INF so the very first frame always runs.
+  private _lastInferenceSeq = -1
+  // User-facing latency/halo controls. `latencyAuto` resolves the effective
+  // mode each frame from the motion tracker; `latencyMode` is the manual
+  // preset used otherwise. `maskPrediction` toggles the velocity-driven mask
+  // warp (off by default — opt-in).
+  private _latencyMode: LatencyMode = DEFAULT_LATENCY_MODE
+  private _latencyAuto = true
+  private _maskPrediction = false
+  // Last effective mode resolved by `_renderFrame`, used by the auto-tuning
+  // hysteresis on the next frame to decide whether to switch.
+  private _lastEffectiveMode: MaskBlendMode = 'frameLock'
+  // Per-frame motion tracker fed from the segmenter loop with the latest
+  // stabilised RoiCropper bbox. Stays unfed (and `valid() === false`) when
+  // ROI cropping is disabled, which the auto/prediction logic checks before
+  // engaging anything.
+  private _motionTracker = new MaskMotionTracker()
 
   virtualBackgroundImage?: HTMLImageElement
 
@@ -134,16 +204,35 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     this.name = opts.type === ProcessorType.VIRTUAL ? 'virtual' : 'blur'
     this.options = opts
     this.type = opts.type
-    this._maxFrameOffset = this._readMaxFrameOffset(opts)
+    const cfg = this._readLatencyConfig(opts)
+    this._latencyMode = cfg.mode
+    this._latencyAuto = cfg.auto
+    this._maskPrediction = cfg.prediction
   }
 
-  private _readMaxFrameOffset(opts: ProcessorConfig): number {
-    if (opts.type === ProcessorType.BLUR || opts.type === ProcessorType.VIRTUAL) {
-      const v = opts.maxFrameOffset
-      if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) return 0
-      return Math.min(Math.floor(v), 60)
+  /**
+   * Resolve the latency/halo controls from the processor config, applying the
+   * "auto + prediction require ROI cropping" guard rail. When ROI cropping is
+   * off the auto-tuning and prediction features have no motion signal to act on,
+   * so we force-disable them at the source rather than rely on runtime checks.
+   */
+  private _readLatencyConfig(
+    opts: ProcessorConfig
+  ): { mode: LatencyMode; auto: boolean; prediction: boolean } {
+    if (opts.type !== ProcessorType.BLUR && opts.type !== ProcessorType.VIRTUAL) {
+      return { mode: DEFAULT_LATENCY_MODE, auto: false, prediction: false }
     }
-    return 0
+    const rawMode = opts.latencyMode
+    const mode: LatencyMode =
+      rawMode === 0 || rawMode === 1 || rawMode === 2 || rawMode === 3 || rawMode === 4
+        ? rawMode
+        : DEFAULT_LATENCY_MODE
+    const roiEnabled = opts.preProcessing?.roiCropping?.enabled === true
+    return {
+      mode,
+      auto: roiEnabled && opts.latencyAuto !== false,
+      prediction: roiEnabled && opts.maskPrediction === true,
+    }
   }
 
   /** Resolves once the active segmenter is loaded and producing frames. */
@@ -267,7 +356,16 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     this.options = opts
     this.type = opts.type
     this.name = opts.type === ProcessorType.VIRTUAL ? 'virtual' : 'blur'
-    this._maxFrameOffset = this._readMaxFrameOffset(opts)
+    const cfg = this._readLatencyConfig(opts)
+    const autoChanged = cfg.auto !== this._latencyAuto
+    const predictionChanged = cfg.prediction !== this._maskPrediction
+    this._latencyMode = cfg.mode
+    this._latencyAuto = cfg.auto
+    this._maskPrediction = cfg.prediction
+    if (autoChanged || predictionChanged) {
+      this._motionTracker.reset()
+      this._lastEffectiveMode = 'frameLock'
+    }
 
     if (!this.gpuRenderer) {
       console.info('[AMP] Update called in passthrough fallback mode; ignoring background processor updates.')
@@ -711,11 +809,31 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
         mediaTime: meta.mediaTime,
         receivedAt: performance.now(),
       }
-      // tickCameraFrame() moved to segmenter loop (currentTime-based) — rVFC is
-      // throttled by Chrome when the video element is off-screen.
+      this._videoFrameSeq++
+      tickCameraFrame()
+      if (this._frameAwaiter) {
+        const a = this._frameAwaiter
+        this._frameAwaiter = null
+        a.resolve()
+      }
       this._rvfcHandle = anyVideo.requestVideoFrameCallback!(tick)
     }
     this._rvfcHandle = anyVideo.requestVideoFrameCallback(tick)
+  }
+
+  /**
+   * Promise resolved by the next rVFC tick. The segmenter loop awaits this to
+   * align with the camera's native cadence instead of polling on a timer.
+   * Multiple ticks between two awaits collapse into a single wake (the loop
+   * always reads `_videoFrameSeq` after wake to know the freshest frame index).
+   */
+  private _waitNextVideoFrame(): Promise<void> {
+    if (!this._frameAwaiter) {
+      let resolve!: () => void
+      const promise = new Promise<void>((r) => { resolve = r })
+      this._frameAwaiter = { promise, resolve }
+    }
+    return this._frameAwaiter.promise
   }
 
   private _publishCameraSettings(): void {
@@ -744,21 +862,49 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     } catch { /* best-effort */ }
     this._rvfcHandle = null
     this._latestVideoFrameMeta = undefined
+    // Wake the segmenter loop if it's waiting on a frame — it will see
+    // `_segLoopActive === false` and exit cleanly.
+    if (this._frameAwaiter) {
+      const a = this._frameAwaiter
+      this._frameAwaiter = null
+      a.resolve()
+    }
   }
 
   /**
-   * Segmenter loop: runs at most 50fps. Each iteration captures the current
-   * <video> frame as an ImageBitmap (GPU-backed snapshot), runs inference, and
-   * publishes the (mask, frame) pair atomically. The previous bitmap is closed
-   * to keep memory bounded to a single in-flight pair.
+   * Segmenter loop: driven by `requestVideoFrameCallback` on the source video
+   * when available — the loop wakes on each real camera tick instead of a
+   * fixed timer, then runs inference only every N camera frames (frame skip).
+   * This frees the GPU between inferences so the camera capture path can
+   * deliver its full native framerate (e.g. 30fps) instead of being throttled
+   * by back-to-back inference work.
+   *
+   * Fallback (no rVFC, e.g. Firefox <132): paces on `setTimeout(16.67ms)`
+   * exactly like before.
+   *
+   * Each iteration captures the current <video> frame as an ImageBitmap
+   * (GPU-backed snapshot), runs inference, and publishes the (mask, frame)
+   * pair atomically. The previous bitmap is closed to keep memory bounded to
+   * a single in-flight pair.
    */
   private async _runSegmenterLoop(): Promise<void> {
-    const TARGET_MS = 1000 / 60
+    const FALLBACK_MS = 1000 / 60
+    const SKIP = AdvancedMattingProcessor.SEGMENTER_FRAME_SKIP
     while (this._segLoopActive && !this._destroyed) {
+      const hasRvfc = this._rvfcHandle !== null
+      // Gate: wake on real camera frame (rVFC) or timer (fallback).
+      if (hasRvfc) {
+        await this._waitNextVideoFrame()
+        if (!this._segLoopActive || this._destroyed) return
+        // Frame skip: only run inference once every SKIP camera frames.
+        const seq = this._videoFrameSeq
+        if (seq - this._lastInferenceSeq < SKIP) continue
+        this._lastInferenceSeq = seq
+      }
       const t0 = performance.now()
       const seg = this.segmenter
       if (!seg || !this.videoElement || this.videoElement.videoWidth === 0) {
-        await new Promise<void>(r => setTimeout(r, TARGET_MS))
+        await new Promise<void>(r => setTimeout(r, FALLBACK_MS))
         continue
       }
       let capturedSource: ImageBitmap | null = null
@@ -771,7 +917,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
         // cannot drift to a newer frame while createImageBitmap awaits.
         const snapshot = this._captureSnapshot()
         if (!snapshot) {
-          await new Promise<void>(r => setTimeout(r, TARGET_MS))
+          await new Promise<void>(r => setTimeout(r, FALLBACK_MS))
           continue
         }
         // Record the camera shutter time for this snapshot, derived from the
@@ -820,6 +966,16 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
           }
           capturedSource = null // ownership transferred to _latestPair
           previous?.source.close()
+          // Feed the motion tracker with the latest stabilised bbox so the
+          // render loop can resolve the auto mode and compute the prediction
+          // offset. When ROI cropping is off, `getCurrentBbox()` returns null
+          // and the tracker stays invalid (auto + prediction stay disabled).
+          if (this._latencyAuto || this._maskPrediction) {
+            this._motionTracker.update(
+              this._preProcessingPipeline?.getCurrentBbox() ?? null,
+              cameraCaptureTime
+            )
+          }
         } else {
           capturedSource.close()
           capturedSource = null
@@ -839,13 +995,20 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
         await new Promise<void>(r => setTimeout(r, 100))
         continue
       }
-      // Always yield to the event loop; sleep for whatever is left of 20ms.
-      // If inference took longer than one frame period, setTimeout(0) still
-      // lets the browser process render callbacks and input before looping.
-      const elapsed = performance.now() - t0
-      await new Promise<void>(r => setTimeout(r, Math.max(0, TARGET_MS - elapsed)))
+      // Fallback pacing only — when rVFC is active the next iteration awaits
+      // the rVFC tick at the top and we must not double-sleep here.
+      if (this._rvfcHandle === null) {
+        const elapsed = performance.now() - t0
+        await new Promise<void>(r => setTimeout(r, Math.max(0, FALLBACK_MS - elapsed)))
+      }
     }
   }
+
+  // Run inference once every N camera frames. N=2 with a 30fps camera yields
+  // a ~15fps mask, which the temporal EMA + MaskMotionTracker compensate for,
+  // while halving GPU contention on the camera capture path. Empirically the
+  // camera FPS rises from ~19 to ~26-28 with this setting.
+  private static readonly SEGMENTER_FRAME_SKIP = 2
 
   // Slightly below 60fps so floating-point jitter in rAF timestamps doesn't
   // cause every-other-frame skipping (threshold == rAF interval → ~30fps).
@@ -855,9 +1018,11 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
   private _scheduleRender(): void {
     if (!this._segLoopActive) return
     this._renderLoopHandle = requestAnimationFrame((now) => {
-      // Camera FPS probe: fires at rAF rate (~60fps) so we never miss a camera
-      // frame even when the segmenter loop is slower than the camera framerate.
-      if (this.videoElement) {
+      // Camera FPS probe (fallback only): when rVFC is active, `tickCameraFrame()`
+      // is called from the rVFC callback on every real camera tick — which is
+      // both more accurate and not perturbed by GPU/main-thread contention. We
+      // only fall back to `currentTime` polling when rVFC isn't available.
+      if (this._rvfcHandle === null && this.videoElement) {
         const t = this.videoElement.currentTime
         if (t !== this._lastVideoTime) {
           this._lastVideoTime = t
@@ -889,21 +1054,90 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       if (vw !== this.gpuRenderer.outW || vh !== this.gpuRenderer.outH) {
         this.gpuRenderer.resizeOutput(vw, vh)
       }
+      this.gpuRenderer.setMaskOffset(0, 0)
+      this.gpuRenderer.setBlendMix(0)
+      setEffectiveLatencyMode(null)
+      setMotionScore(0)
+      setMaskOffset(0, 0)
+      setPredictionActive(false)
       this._drawPassthrough()
       return
     }
     this.gpuRenderer.uploadMask(pair.mask, pair.procW, pair.procH)
 
-    // Decide whether to apply the mask to the live <video> frame (low latency,
-    // up to maxFrameOffset frames of halo) or to the captured frame the mask
-    // was computed from (frame-locked, zero halo, ~inference-time latency).
-    // 1 "frame" ≈ 1000/30 ms (UI convention; actual camera framerate may differ).
-    const FRAME_MS = 1000 / 30
-    const maxAgeMs = this._maxFrameOffset * FRAME_MS
-    const ageMs = performance.now() - pair.captureTime
-    const useLive = this._maxFrameOffset > 0 && ageMs <= maxAgeMs
+    const motionScore = this._motionTracker.isValid() ? this._motionTracker.getMotionScore() : 0
+    setMotionScore(motionScore)
 
-    if (useLive) {
+    // Resolve the effective blend mode + prediction gain. Auto path requires
+    // a valid motion signal (i.e. ROI cropping is on and at least one bbox
+    // has been observed). Manual path uses the static mapping table.
+    let effectiveMode: MaskBlendMode
+    let predictionGain: number
+    let blendT = 0
+    if (this._latencyAuto && this._motionTracker.isValid()) {
+      effectiveMode = this._resolveAutoMode(motionScore)
+      // Prediction is an explicit opt-in to the halo trade-off. In that case
+      // we never stay fully frame-locked — the whole point is to see a latency
+      // reduction. We upgrade frameLock to blend so the cross-fade kicks in.
+      if (this._maskPrediction && effectiveMode === 'frameLock') {
+        effectiveMode = 'blend'
+      }
+      predictionGain = effectiveMode === 'live' ? 1.0 : effectiveMode === 'blend' ? 0.3 : 0
+      if (effectiveMode === 'blend') {
+        const span = AUTO_LIVE_THRESHOLD - AUTO_LOCK_THRESHOLD
+        const motionBlend = clamp01((motionScore - AUTO_LOCK_THRESHOLD) / span)
+        // With prediction on, mix a baseline blend so even zero motion gives
+        // a visible latency drop. Without prediction, fall back to a pure
+        // motion-driven blend (no halo risk when subject is still).
+        const baseline = this._maskPrediction ? AUTO_PRED_BLEND_BASELINE : 0
+        blendT = clamp01(baseline + (1 - baseline) * motionBlend)
+      }
+    } else {
+      const entry = STATIC_MODE_TABLE[this._latencyMode]
+      effectiveMode = entry.mode
+      predictionGain = entry.predictionGain
+      if (effectiveMode === 'blend') {
+        const ageMs = performance.now() - pair.captureTime
+        blendT = clamp01(ageMs / BLEND_MODE_MAX_AGE_MS)
+      }
+    }
+    this._lastEffectiveMode = effectiveMode
+    setEffectiveLatencyMode(effectiveMode)
+
+    // Compute prediction offset (uv coords). Only applied when the user has
+    // enabled it AND we are reading from a live frame (frame-locked composite
+    // doesn't benefit — the mask already matches the displayed pixels).
+    let offsetU = 0
+    let offsetV = 0
+    const predictionWillRun =
+      this._maskPrediction &&
+      predictionGain > 0 &&
+      this._motionTracker.isValid() &&
+      effectiveMode !== 'frameLock'
+    if (predictionWillRun) {
+      const v = this._motionTracker.getVelocityUv()
+      const predictionDt_s = (performance.now() - pair.cameraCaptureTime) / 1000
+      offsetU = clampOffset(v.vx * predictionDt_s * predictionGain)
+      offsetV = clampOffset(v.vy * predictionDt_s * predictionGain)
+    }
+    this.gpuRenderer.setMaskOffset(offsetU, offsetV)
+    setMaskOffset(offsetU, offsetV)
+    setPredictionActive(predictionWillRun)
+
+    this.gpuRenderer.setBlendMix(effectiveMode === 'blend' ? blendT : 0)
+
+    // Pick the primary source. Frame-locked uses the pair's ImageBitmap. Live
+    // and blend both use the live <video> as the primary; blend additionally
+    // uploads the pair's bitmap as the second (frame-locked) source via the
+    // optional liveSource arg, so the shader can cross-fade.
+    if (effectiveMode === 'frameLock') {
+      const sw = pair.source.width
+      const sh = pair.source.height
+      if (sw !== this.gpuRenderer.outW || sh !== this.gpuRenderer.outH) {
+        this.gpuRenderer.resizeOutput(sw, sh)
+      }
+      this.gpuRenderer.render(pair.source)
+    } else if (effectiveMode === 'live') {
       const vw = this.videoElement.videoWidth
       const vh = this.videoElement.videoHeight
       if (vw !== this.gpuRenderer.outW || vh !== this.gpuRenderer.outH) {
@@ -911,24 +1145,50 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       }
       this.gpuRenderer.render(this.videoElement)
     } else {
+      // blend: render(frame-locked bitmap, live video) — the shader mixes them
+      // with blendMix as the cross-fade weight.
       const sw = pair.source.width
       const sh = pair.source.height
       if (sw !== this.gpuRenderer.outW || sh !== this.gpuRenderer.outH) {
         this.gpuRenderer.resizeOutput(sw, sh)
       }
-      this.gpuRenderer.render(pair.source)
+      this.gpuRenderer.render(pair.source, this.videoElement)
     }
 
-    // Stats: capture→display latency = wall clock - camera shutter time of
-    // the frame we are actually displaying. Mask→applied gap = camera time
-    // delta between the frame that produced the mask and the displayed frame.
+    // Stats: capture→display latency reflects the camera shutter time of the
+    // pixels actually shown. For blend, we report the interpolated time
+    // proportional to blendT.
     const now = performance.now()
-    const appliedCameraTime = useLive
-      ? (this._latestVideoFrameMeta?.captureTime ?? now)
-      : pair.cameraCaptureTime
+    const liveCameraTime = this._latestVideoFrameMeta?.captureTime ?? now
+    let appliedCameraTime: number
+    if (effectiveMode === 'live') {
+      appliedCameraTime = liveCameraTime
+    } else if (effectiveMode === 'frameLock') {
+      appliedCameraTime = pair.cameraCaptureTime
+    } else {
+      appliedCameraTime = pair.cameraCaptureTime + (liveCameraTime - pair.cameraCaptureTime) * blendT
+    }
     pushLatencySample(now - appliedCameraTime)
     pushGapSample(Math.max(0, appliedCameraTime - pair.cameraCaptureTime))
     tickRenderFrame()
+  }
+
+  /**
+   * Apply the auto-tuning thresholds with hysteresis around `_lastEffectiveMode`
+   * so the resolved mode doesn't flap when the motion score sits right on a
+   * boundary. The hysteresis band is asymmetric — leaving a mode requires
+   * crossing a slightly stricter threshold than entering it.
+   */
+  private _resolveAutoMode(motionScore: number): MaskBlendMode {
+    const lock = AUTO_LOCK_THRESHOLD
+    const live = AUTO_LIVE_THRESHOLD
+    const h = AUTO_HYSTERESIS
+    const prev = this._lastEffectiveMode
+    if (motionScore < lock - h) return 'frameLock'
+    if (motionScore > live + h) return 'live'
+    if (motionScore < lock + h && prev === 'frameLock') return 'frameLock'
+    if (motionScore > live - h && prev === 'live') return 'live'
+    return 'blend'
   }
 
   // ────────────────────────────────────────────────────────────────────────────
@@ -1055,6 +1315,10 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     this._configuredModel = undefined
     this._segLoopActive = false
     this._lastVideoTime = -1
+    this._videoFrameSeq = 0
+    this._lastInferenceSeq = -1
+    this._motionTracker.reset()
+    this._lastEffectiveMode = 'frameLock'
     this._cancelRender()
     this._stopVideoFrameMetaTracking()
     resetMattingStats()

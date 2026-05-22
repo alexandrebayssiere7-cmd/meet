@@ -292,8 +292,24 @@
         "blurRadius": "Vervaging-intensiteit",
         "upsamplingRadius": "Straal (Guided Filter)",
         "upsamplingEps": "Regularisatie (Guided Filter)",
-        "maxFrameOffset": "Max. masker / frame-versatz (frames)",
-        "maxFrameOffsetStrict": "vergrendeld"
+        "latencyAuto": "Auto (past zich aan beweging aan)",
+        "maskPrediction": "Maskervoorspelling (geavanceerd)",
+        "latencyMode": "Halo- / latentiecompromis",
+        "latencyModeValue": {
+          "0": "Vergrendeld",
+          "1": "Stabiel",
+          "2": "Gebalanceerd",
+          "3": "Reactief",
+          "4": "Live"
+        },
+        "effectiveModeLabelPrefix": "Actieve modus",
+        "effectiveModeLabel": {
+          "frameLock": "Vergrendeld",
+          "blend": "Gemengd",
+          "live": "Live"
+        },
+        "motionScoreLabel": "Beweging",
+        "enableRoiHint": "Schakel onderwerpvolging (ROI) in om deze opties te gebruiken."
       },
       "apply": "Toepassen"
     },

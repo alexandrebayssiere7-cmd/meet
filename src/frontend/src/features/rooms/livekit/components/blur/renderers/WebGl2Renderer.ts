@@ -78,6 +78,18 @@ export class WebGl2Renderer implements GpuRenderer {
 
   // textures
   private videoTex!: WebGLTexture
+  // Live-camera frame, uploaded only when the orchestrator requests a blend
+  // between the frame-locked source (`videoTex`) and the live source. Allocated
+  // lazily on first use to avoid the memory cost when blend mode is never used.
+  private liveVideoTex: WebGLTexture | null = null
+  // Mask warp offset in uv space (uMaskOffset uniform). Applied at the mask
+  // sample-time in the composite shader to align the (possibly stale) mask
+  // with the live frame using a velocity prediction.
+  private maskOffsetU = 0
+  private maskOffsetV = 0
+  // Cross-fade weight between `videoTex` (frame-locked, 0.0) and `liveVideoTex`
+  // (live, 1.0). 0.0 disables the blend pass entirely.
+  private blendMix = 0
   private rawMaskTex!: WebGLTexture // R8 at proc res — uploaded from segmenter
   private maskA!: WebGLTexture // R8 ping
   private maskB!: WebGLTexture // R8 pong
@@ -192,9 +204,13 @@ export class WebGl2Renderer implements GpuRenderer {
     const gl = this.gl
     if (!gl) return
 
-    // 1. Reallocate videoTex at new size
+    // 1. Reallocate videoTex (and the optional liveVideoTex) at new size
     if (this.videoTex) {
       gl.bindTexture(gl.TEXTURE_2D, this.videoTex)
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
+    }
+    if (this.liveVideoTex) {
+      gl.bindTexture(gl.TEXTURE_2D, this.liveVideoTex)
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
     }
 
@@ -316,7 +332,20 @@ export class WebGl2Renderer implements GpuRenderer {
     }
   }
 
-  render(source: RenderSource) {
+  setMaskOffset(u: number, v: number) {
+    this.maskOffsetU = Number.isFinite(u) ? u : 0
+    this.maskOffsetV = Number.isFinite(v) ? v : 0
+  }
+
+  setBlendMix(t: number) {
+    if (!Number.isFinite(t)) {
+      this.blendMix = 0
+      return
+    }
+    this.blendMix = t < 0 ? 0 : t > 1 ? 1 : t
+  }
+
+  render(source: RenderSource, liveSource?: RenderSource) {
     if (!source) return
     const isVideo = (source as HTMLVideoElement).videoWidth !== undefined
     const sw = isVideo
@@ -351,6 +380,31 @@ export class WebGl2Renderer implements GpuRenderer {
       return
     }
     if (!isVideo) gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true)
+
+    // 1b. Upload optional live source (used by the standard composite shader
+    // when uBlendT > 0). Allocated lazily on first use.
+    const wantsBlend = this.blendMix > 0 && liveSource !== undefined
+    if (wantsBlend) {
+      const liveIsVideo = (liveSource as HTMLVideoElement).videoWidth !== undefined
+      if (!this.liveVideoTex) {
+        this.liveVideoTex = gl.createTexture()
+        gl.bindTexture(gl.TEXTURE_2D, this.liveVideoTex)
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, this.outW, this.outH, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+      }
+      gl.activeTexture(gl.TEXTURE3)
+      gl.bindTexture(gl.TEXTURE_2D, this.liveVideoTex)
+      if (!liveIsVideo) gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false)
+      try {
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, liveSource!)
+      } catch (e) {
+        void e
+      }
+      if (!liveIsVideo) gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true)
+    }
 
     // 2. Run post-processing chain on the mask at processing resolution.
     const procMaskTex = this._runPostProcessing()
@@ -389,6 +443,21 @@ export class WebGl2Renderer implements GpuRenderer {
     gl.activeTexture(gl.TEXTURE2)
     gl.bindTexture(gl.TEXTURE_2D, finalMaskTex)
     gl.uniform1i(gl.getUniformLocation(this.pComposite, 'uMask'), 2)
+    // uLiveVideo defaults to the frame-locked source when blend is off, so the
+    // shader's mix() degenerates to a no-op. When blend is on, bind the live
+    // source we uploaded above.
+    gl.activeTexture(gl.TEXTURE3)
+    gl.bindTexture(gl.TEXTURE_2D, wantsBlend && this.liveVideoTex ? this.liveVideoTex : this.videoTex)
+    gl.uniform1i(gl.getUniformLocation(this.pComposite, 'uLiveVideo'), 3)
+    gl.uniform1f(
+      gl.getUniformLocation(this.pComposite, 'uBlendT'),
+      wantsBlend ? this.blendMix : 0
+    )
+    gl.uniform2f(
+      gl.getUniformLocation(this.pComposite, 'uMaskOffset'),
+      this.maskOffsetU,
+      this.maskOffsetV
+    )
     gl.uniform1f(
       gl.getUniformLocation(this.pComposite, 'uErosionRadius'),
       this.postCfg.erosion?.pixels ?? 0
@@ -440,6 +509,7 @@ export class WebGl2Renderer implements GpuRenderer {
     const gl = this.gl
     const tex = [
       this.videoTex,
+      this.liveVideoTex,
       this.rawMaskTex,
       this.maskA,
       this.maskB,
@@ -1193,28 +1263,35 @@ void main() {
     const FS_COMPOSITE = `#version 300 es
 precision mediump float;
 in vec2 vUv;
-uniform sampler2D uVideo;
+uniform sampler2D uVideo;     // frame-locked source (matches uMask)
 uniform sampler2D uBg;
 uniform sampler2D uMask;
+uniform sampler2D uLiveVideo; // live <video> source, used when uBlendT > 0
 uniform float uErosionRadius; // pixels at output resolution, 0 = disabled
 uniform vec2 uOutTexel;       // vec2(1/outW, 1/outH)
+uniform vec2 uMaskOffset;     // uv offset applied to every mask sample (prediction)
+uniform float uBlendT;        // 0 = pure uVideo, 1 = pure uLiveVideo, in between = cross-fade
 out vec4 fragColor;
 void main() {
-  vec3 fg = texture(uVideo, vUv).rgb;
+  vec3 fgLocked = texture(uVideo, vUv).rgb;
+  vec3 fg = uBlendT > 0.0
+    ? mix(fgLocked, texture(uLiveVideo, vUv).rgb, uBlendT)
+    : fgLocked;
   vec3 bg = texture(uBg, vUv).rgb;
   // Erosion applied here at output resolution so that uErosionRadius is measured
   // in actual output pixels — not in the coarse processing-resolution pixels that
   // would produce large blocky artefacts after upsampling.
   // Diamond kernel (H + V in one pass): accurate enough for edge trimming.
-  float m = texture(uMask, vUv).r;
+  vec2 mUv = vUv - uMaskOffset;
+  float m = texture(uMask, mUv).r;
   if (uErosionRadius > 0.0) {
     for (int i = 1; i <= 16; i++) {
       if (float(i) > uErosionRadius) break;
       float fi = float(i);
-      m = min(m, texture(uMask, vUv + vec2(uOutTexel.x * fi, 0.0)).r);
-      m = min(m, texture(uMask, vUv - vec2(uOutTexel.x * fi, 0.0)).r);
-      m = min(m, texture(uMask, vUv + vec2(0.0, uOutTexel.y * fi)).r);
-      m = min(m, texture(uMask, vUv - vec2(0.0, uOutTexel.y * fi)).r);
+      m = min(m, texture(uMask, mUv + vec2(uOutTexel.x * fi, 0.0)).r);
+      m = min(m, texture(uMask, mUv - vec2(uOutTexel.x * fi, 0.0)).r);
+      m = min(m, texture(uMask, mUv + vec2(0.0, uOutTexel.y * fi)).r);
+      m = min(m, texture(uMask, mUv - vec2(0.0, uOutTexel.y * fi)).r);
     }
   }
   // +0.035 foreground bias preserves edges that conservative segmentation models clip.
