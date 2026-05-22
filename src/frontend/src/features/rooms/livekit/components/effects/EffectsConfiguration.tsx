@@ -201,13 +201,31 @@ const MattingDiagnostics = () => {
       </Text>
       <Text variant="sm">
         {t('effects.stats.fps', 'FPS')} :{' '}
-        <strong>{stats.renderFps.toFixed(1)}</strong>{' '}
+        <strong>{stats.cameraFps.toFixed(1)}</strong>{' '}
         <span className={css({ color: 'greyscale.500' })}>
+          ({t('effects.stats.fpsCamera', 'camera')}) ·{' '}
+          <strong>{stats.renderFps.toFixed(1)}</strong>{' '}
           ({t('effects.stats.fpsRender', 'render')}) ·{' '}
           <strong>{stats.segmenterFps.toFixed(1)}</strong>{' '}
           ({t('effects.stats.fpsSegmenter', 'segmenter')})
         </span>
       </Text>
+      {stats.cameraSettings && (
+        <Text variant="sm">
+          {t('effects.stats.cameraConstraints', 'Caméra')} :{' '}
+          <strong>
+            {stats.cameraSettings.width}×{stats.cameraSettings.height}
+          </strong>{' '}
+          <span className={css({ color: 'greyscale.500' })}>
+            {stats.cameraSettings.frameRateActual !== null && (
+              <>{stats.cameraSettings.frameRateActual.toFixed(0)} fps (actuel)</>
+            )}
+            {stats.cameraSettings.frameRateMax !== null && (
+              <> · max {stats.cameraSettings.frameRateMax.toFixed(0)} fps</>
+            )}
+          </span>
+        </Text>
+      )}
     </div>
   )
 }

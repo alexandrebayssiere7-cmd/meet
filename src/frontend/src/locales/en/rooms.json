@@ -357,6 +357,7 @@
       "maskGap": "Mask → rendered frame gap",
       "inference": "Segmenter inference",
       "fps": "FPS",
+      "fpsCamera": "camera",
       "fpsRender": "render",
       "fpsSegmenter": "segmenter",
       "windowAvg": "avg of last {{n}}"

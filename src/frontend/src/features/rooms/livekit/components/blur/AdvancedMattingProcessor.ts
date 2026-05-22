@@ -18,8 +18,10 @@ import {
   pushInferenceSample,
   pushLatencySample,
   resetMattingStats,
+  setCameraSettings,
   setMattingStatsActive,
   setMattingStatsModel,
+  tickCameraFrame,
   tickRenderFrame,
   tickSegmenterFrame,
 } from './stats/MattingStatsStore'
@@ -124,6 +126,9 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
   private _destroyed = false
   private _preProcessingPipeline?: PreProcessingPipeline
   private _lastMask?: Float32Array
+  // Tracks video.currentTime of the last processed frame to detect duplicate
+  // frames (camera delivering slower than the segmenter loop cadence).
+  private _lastVideoTime = -1
 
   constructor(opts: ProcessorConfig) {
     this.name = opts.type === ProcessorType.VIRTUAL ? 'virtual' : 'blur'
@@ -159,6 +164,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     this.source = opts.track as MediaStreamTrack
     this.sourceSettings = this.source!.getSettings()
     this.videoElement = opts.element as HTMLVideoElement
+    this._publishCameraSettings()
     const video = this.videoElement
 
     try {
@@ -705,9 +711,26 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
         mediaTime: meta.mediaTime,
         receivedAt: performance.now(),
       }
+      // tickCameraFrame() moved to segmenter loop (currentTime-based) — rVFC is
+      // throttled by Chrome when the video element is off-screen.
       this._rvfcHandle = anyVideo.requestVideoFrameCallback!(tick)
     }
     this._rvfcHandle = anyVideo.requestVideoFrameCallback(tick)
+  }
+
+  private _publishCameraSettings(): void {
+    const s = this.sourceSettings
+    const track = this.source as MediaStreamTrack & {
+      getCapabilities?: () => MediaTrackCapabilities
+    }
+    const cap = track.getCapabilities?.()
+    setCameraSettings({
+      frameRateRequested: typeof s?.frameRate === 'number' ? s.frameRate : null,
+      frameRateActual: typeof s?.frameRate === 'number' ? s.frameRate : null,
+      frameRateMax: typeof cap?.frameRate?.max === 'number' ? cap.frameRate.max : null,
+      width: typeof s?.width === 'number' ? s.width : null,
+      height: typeof s?.height === 'number' ? s.height : null,
+    })
   }
 
   private _stopVideoFrameMetaTracking(): void {
@@ -730,7 +753,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
    * to keep memory bounded to a single in-flight pair.
    */
   private async _runSegmenterLoop(): Promise<void> {
-    const TARGET_MS = 1000 / 50
+    const TARGET_MS = 1000 / 60
     while (this._segLoopActive && !this._destroyed) {
       const t0 = performance.now()
       const seg = this.segmenter
@@ -824,13 +847,23 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     }
   }
 
-  // Render loop target: 50fps = 20ms per frame.
-  private static readonly RENDER_TARGET_MS = 1000 / 50
+  // Slightly below 60fps so floating-point jitter in rAF timestamps doesn't
+  // cause every-other-frame skipping (threshold == rAF interval → ~30fps).
+  private static readonly RENDER_TARGET_MS = 1000 / 65
   private _lastRenderTime = 0
 
   private _scheduleRender(): void {
     if (!this._segLoopActive) return
     this._renderLoopHandle = requestAnimationFrame((now) => {
+      // Camera FPS probe: fires at rAF rate (~60fps) so we never miss a camera
+      // frame even when the segmenter loop is slower than the camera framerate.
+      if (this.videoElement) {
+        const t = this.videoElement.currentTime
+        if (t !== this._lastVideoTime) {
+          this._lastVideoTime = t
+          tickCameraFrame()
+        }
+      }
       if (now - this._lastRenderTime >= AdvancedMattingProcessor.RENDER_TARGET_MS) {
         this._lastRenderTime = now
         this._renderFrame()
@@ -1021,6 +1054,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     this._pendingModel = undefined
     this._configuredModel = undefined
     this._segLoopActive = false
+    this._lastVideoTime = -1
     this._cancelRender()
     this._stopVideoFrameMetaTracking()
     resetMattingStats()

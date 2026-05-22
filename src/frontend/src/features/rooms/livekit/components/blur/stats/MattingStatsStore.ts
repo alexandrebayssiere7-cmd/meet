@@ -7,6 +7,14 @@ import { SegmentationModel } from '..'
  * only aggregated values (means) are pushed into valtio, so we don't trigger
  * a re-render on every render-loop tick (~50 Hz).
  */
+export interface CameraSettings {
+  frameRateRequested: number | null   // ce qu'on a demandé (ideal)
+  frameRateActual: number | null      // ce que getSettings() rapporte
+  frameRateMax: number | null         // max hardware via getCapabilities()
+  width: number | null
+  height: number | null
+}
+
 export interface MattingStatsState {
   active: boolean
   configuredModel: SegmentationModel | null
@@ -16,6 +24,8 @@ export interface MattingStatsState {
   segmenterInferenceMs: number
   renderFps: number
   segmenterFps: number
+  cameraFps: number
+  cameraSettings: CameraSettings | null
   samples: number
 }
 
@@ -28,6 +38,8 @@ export const mattingStatsStore = proxy<MattingStatsState>({
   segmenterInferenceMs: 0,
   renderFps: 0,
   segmenterFps: 0,
+  cameraFps: 0,
+  cameraSettings: null,
   samples: 0,
 })
 
@@ -77,17 +89,22 @@ let renderTicks = 0
 let segTicks = 0
 let fpsWindowStart = 0
 
-function tickFps(kind: 'render' | 'segmenter'): void {
+let cameraTicks = 0
+
+function tickFps(kind: 'render' | 'segmenter' | 'camera'): void {
   const now = performance.now()
   if (fpsWindowStart === 0) fpsWindowStart = now
   if (kind === 'render') renderTicks++
-  else segTicks++
+  else if (kind === 'segmenter') segTicks++
+  else cameraTicks++
   const elapsed = now - fpsWindowStart
   if (elapsed >= FPS_WINDOW_MS) {
     mattingStatsStore.renderFps = (renderTicks * 1000) / elapsed
     mattingStatsStore.segmenterFps = (segTicks * 1000) / elapsed
+    mattingStatsStore.cameraFps = (cameraTicks * 1000) / elapsed
     renderTicks = 0
     segTicks = 0
+    cameraTicks = 0
     fpsWindowStart = now
   }
 }
@@ -95,9 +112,11 @@ function tickFps(kind: 'render' | 'segmenter'): void {
 function resetFps(): void {
   renderTicks = 0
   segTicks = 0
+  cameraTicks = 0
   fpsWindowStart = 0
   mattingStatsStore.renderFps = 0
   mattingStatsStore.segmenterFps = 0
+  mattingStatsStore.cameraFps = 0
 }
 
 // Throttle valtio writes: aggregate samples in the ring buffer at full
@@ -143,6 +162,10 @@ export function tickSegmenterFrame(): void {
   tickFps('segmenter')
 }
 
+export function tickCameraFrame(): void {
+  tickFps('camera')
+}
+
 export function setMattingStatsModel(
   configured: SegmentationModel | null,
   current: SegmentationModel | null
@@ -165,6 +188,10 @@ export function setMattingStatsActive(active: boolean): void {
   }
 }
 
+export function setCameraSettings(settings: CameraSettings): void {
+  mattingStatsStore.cameraSettings = settings
+}
+
 export function resetMattingStats(): void {
   latencyBuf.reset()
   gapBuf.reset()
@@ -176,6 +203,7 @@ export function resetMattingStats(): void {
   mattingStatsStore.captureToDisplayLatencyMs = 0
   mattingStatsStore.maskFrameGapMs = 0
   mattingStatsStore.segmenterInferenceMs = 0
+  mattingStatsStore.cameraSettings = null
   mattingStatsStore.samples = 0
   lastFlush = 0
   pendingFlush = false

@@ -357,6 +357,7 @@
       "maskGap": "Verschil masker → weergegeven beeld",
       "inference": "Segmenter-inferentie",
       "fps": "FPS",
+      "fpsCamera": "camera",
       "fpsRender": "weergave",
       "fpsSegmenter": "segmenter",
       "windowAvg": "gem. over {{n}}"

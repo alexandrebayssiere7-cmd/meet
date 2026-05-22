@@ -357,6 +357,7 @@
       "maskGap": "Écart masque → frame affichée",
       "inference": "Inférence segmenter",
       "fps": "FPS",
+      "fpsCamera": "caméra",
       "fpsRender": "rendu",
       "fpsSegmenter": "segmenter",
       "windowAvg": "moy. sur {{n}}"

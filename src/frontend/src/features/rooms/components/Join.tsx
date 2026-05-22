@@ -145,6 +145,7 @@ export const Join = ({
       video: !!initialUserChoices.current &&
         initialUserChoices.current?.videoEnabled && {
           deviceId: initialUserChoices.current.videoDeviceId,
+          frameRate: { ideal: 60 },
           processor: BackgroundProcessorFactory.fromProcessorConfig(
             initialUserChoices.current.processorConfig
           ),

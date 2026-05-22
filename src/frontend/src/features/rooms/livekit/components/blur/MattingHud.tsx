@@ -70,7 +70,7 @@ export const MattingHud = ({ alwaysVisible = false }: MattingHudProps) => {
       <div>Δ {stats.maskFrameGapMs.toFixed(0)}ms</div>
       <div>inf {stats.segmenterInferenceMs.toFixed(0)}ms</div>
       <div>
-        fps {stats.renderFps.toFixed(0)}/{stats.segmenterFps.toFixed(0)}
+        cam {stats.cameraFps.toFixed(0)} · r {stats.renderFps.toFixed(0)} · s {stats.segmenterFps.toFixed(0)} fps
       </div>
     </div>
   )

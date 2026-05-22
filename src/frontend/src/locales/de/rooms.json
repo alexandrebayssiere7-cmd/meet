@@ -358,6 +358,7 @@
       "maskGap": "Abstand Maske → angezeigtes Bild",
       "inference": "Segmenter-Inferenz",
       "fps": "FPS",
+      "fpsCamera": "Kamera",
       "fpsRender": "Anzeige",
       "fpsSegmenter": "Segmenter",
       "windowAvg": "Ø der letzten {{n}}"

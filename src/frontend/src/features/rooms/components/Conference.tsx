@@ -98,6 +98,7 @@ export const Conference = ({
       },
       videoCaptureDefaults: {
         deviceId: userConfig.videoDeviceId ?? undefined,
+        frameRate: { ideal: 60 },
         resolution: userConfig.videoPublishResolution
           ? VideoPresets[userConfig.videoPublishResolution].resolution
           : undefined,
