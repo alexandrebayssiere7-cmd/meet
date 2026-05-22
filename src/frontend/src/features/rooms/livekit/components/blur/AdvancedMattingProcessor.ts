@@ -166,7 +166,9 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
         if (this.processedTrack && this.processedTrack !== this.source) {
           try {
             this.processedTrack.stop()
-          } catch { }
+          } catch {
+            // Ignored
+          }
         }
         this.processedTrack = undefined
         return
@@ -259,7 +261,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
 
       try {
         await seg.segment(dummyData, performance.now())
-      } catch (warmupErr) {
+      } catch {
         console.warn(
           '%c┌────────────────────────────────────────────────────────────┐\n' +
           '│ [AMP BENCHMARK] WARM-UP FAILED                             │\n' +
@@ -341,7 +343,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       )
 
       return success
-    } catch (e) {
+    } catch {
       console.warn(
         '%c┌────────────────────────────────────────────────────────────┐\n' +
         '│ [AMP BENCHMARK] ERROR ENCOUNTERED                          │\n' +
@@ -665,6 +667,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
 
     // Modern synchronization: requestVideoFrameCallback
     if (this.videoElement && 'requestVideoFrameCallback' in this.videoElement) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       this._renderLoopHandle = (this.videoElement as any).requestVideoFrameCallback(() => {
         if (!this._segLoopActive || this._destroyed) return
         try {
@@ -695,6 +698,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
   private _cancelRender(): void {
     if (this._renderLoopHandle === null) return
     if (this.videoElement && 'cancelVideoFrameCallback' in this.videoElement) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (this.videoElement as any).cancelVideoFrameCallback(this._renderLoopHandle)
     } else {
       cancelAnimationFrame(this._renderLoopHandle)

@@ -34,22 +34,22 @@ export type PreProcessingConfig = {
 
 export type ProcessorConfig =
   | {
-      type: ProcessorType.BLUR
-      blurRadius: number
-      model?: SegmentationModel
-      preProcessing?: PreProcessingConfig
-      postProcessing?: PostProcessingConfig
-      upsampling?: UpsamplingConfig
-    }
+    type: ProcessorType.BLUR
+    blurRadius: number
+    model?: SegmentationModel
+    preProcessing?: PreProcessingConfig
+    postProcessing?: PostProcessingConfig
+    upsampling?: UpsamplingConfig
+  }
   | {
-      type: ProcessorType.VIRTUAL
-      imagePath: string
-      fileId?: string
-      model?: SegmentationModel
-      preProcessing?: PreProcessingConfig
-      postProcessing?: PostProcessingConfig
-      upsampling?: UpsamplingConfig
-    }
+    type: ProcessorType.VIRTUAL
+    imagePath: string
+    fileId?: string
+    model?: SegmentationModel
+    preProcessing?: PreProcessingConfig
+    postProcessing?: PostProcessingConfig
+    upsampling?: UpsamplingConfig
+  }
   | ({ type: ProcessorType.FACE_LANDMARKS } & FaceLandmarksOptions)
 
 export interface BackgroundProcessorInterface extends TrackProcessor<Track.Kind> {
