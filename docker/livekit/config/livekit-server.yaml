@@ -4,6 +4,10 @@ redis:
 keys:
   devkey: secret
 
+rtc:
+  node_ip: 127.0.0.1
+  use_external_ip: false
+
 webhook:
   api_key: devkey
   urls:

@@ -32,6 +32,8 @@ import { isFireFox } from '@/utils/livekit'
 import { useIsMobile } from '@/utils/useIsMobile'
 import { navigateTo } from '@/navigation/navigateTo'
 import { connectionObserverStore } from '@/stores/connectionObserver'
+import { useSnapshot } from 'valtio'
+import { permissionsStore } from '@/stores/permissions'
 
 export const Conference = ({
   roomId,
@@ -48,6 +50,10 @@ export const Conference = ({
   const { userChoices: userConfig } = usePersistentUserChoices() as {
     userChoices: LocalUserChoices
   }
+
+  const { cameraPermission, microphonePermission } = useSnapshot(permissionsStore)
+  const isCameraDisabled = cameraPermission === 'denied' || cameraPermission === 'unavailable'
+  const isMicrophoneDisabled = microphonePermission === 'denied' || microphonePermission === 'unavailable'
 
   useEffect(() => {
     posthog.capture('visit-room', { slug: roomId })
@@ -215,9 +221,10 @@ export const Conference = ({
           serverUrl={serverUrl}
           token={data?.livekit?.token}
           connect={isConnectionWarmedUp}
-          audio={userConfig.audioEnabled}
+          audio={userConfig.audioEnabled && !isMicrophoneDisabled}
           video={
-            userConfig.videoEnabled && {
+            userConfig.videoEnabled &&
+            !isCameraDisabled && {
               processor: BackgroundProcessorFactory.fromProcessorConfig(
                 userConfig.processorConfig
               ),

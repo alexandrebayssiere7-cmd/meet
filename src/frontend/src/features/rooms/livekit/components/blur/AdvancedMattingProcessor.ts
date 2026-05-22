@@ -166,7 +166,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
         if (this.processedTrack && this.processedTrack !== this.source) {
           try {
             this.processedTrack.stop()
-          } catch {}
+          } catch { }
         }
         this.processedTrack = undefined
         return
@@ -246,17 +246,17 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
         )
         return false
       }
-      
+
       const width = seg.inputSize.width
       const height = seg.inputSize.height
-      
+
       const dummyCanvas = document.createElement('canvas')
       dummyCanvas.width = width
       dummyCanvas.height = height
       const ctx = dummyCanvas.getContext('2d')
       if (!ctx) return false
       const dummyData = ctx.createImageData(width, height)
-      
+
       try {
         await seg.segment(dummyData, performance.now())
       } catch (warmupErr) {
@@ -271,7 +271,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
         )
         return false
       }
-      
+
       const runs = 4
       let totalTime = 0
       for (let i = 0; i < runs; i++) {
@@ -280,18 +280,18 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
         await seg.segment(dummyData, performance.now())
         totalTime += performance.now() - start
       }
-      
+
       const avg = totalTime / runs
       const success = avg <= 35
 
       const widthCard = 60
       const padRight = (str: string, len: number) => str + ' '.repeat(Math.max(0, len - str.length))
-      
+
       const titleLine = padRight(`  [AMP BENCHMARK] MULTICLASS PERFORMANCE`, widthCard)
       const latencyLabel = `  Average Inference Latency: `
       const latencyVal = `${avg.toFixed(2)} ms`
       const latencyPadding = ' '.repeat(Math.max(0, widthCard - latencyLabel.length - latencyVal.length))
-      
+
       const thresholdLine = padRight(`  Target Threshold:          30.00 ms`, widthCard)
       const delegateLine = padRight(`  Device WebGL Delegate:     GPU`, widthCard)
       const resultLabel = `  Evaluation Result:         `
@@ -609,7 +609,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
    * GPU when inference is faster than one frame period.
    */
   private async _runSegmenterLoop(): Promise<void> {
-    const TARGET_MS = 1000 / 50
+    const TARGET_MS = 1000 / 30
     while (this._segLoopActive && !this._destroyed) {
       const t0 = performance.now()
       const seg = this.segmenter
@@ -628,11 +628,11 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
         if (this.segmenter === seg) {
           const mask = this._preProcessingPipeline
             ? this._preProcessingPipeline.applyAfterInference(
-                rawMask,
-                this.processingWidth,
-                this.processingHeight,
-                cropBbox
-              )
+              rawMask,
+              this.processingWidth,
+              this.processingHeight,
+              cropBbox
+            )
             : rawMask
           this._lastMask = mask
           this._latestMask = mask
@@ -662,7 +662,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
 
   private _scheduleRender(): void {
     if (!this._segLoopActive || this._destroyed) return
-    
+
     // Modern synchronization: requestVideoFrameCallback
     if (this.videoElement && 'requestVideoFrameCallback' in this.videoElement) {
       this._renderLoopHandle = (this.videoElement as any).requestVideoFrameCallback(() => {

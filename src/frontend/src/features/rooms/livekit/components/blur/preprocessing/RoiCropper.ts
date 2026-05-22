@@ -78,7 +78,8 @@ export function stabilizeBbox(current: BBox, next: BBox): BBox {
   }
 }
 
-/** Bilinear resize of a Float32 single-channel image. */
+/*
+** Bilinear resize of a Float32 single-channel image. *
 function resizeFloat32(
   src: Float32Array,
   srcW: number,
@@ -107,12 +108,13 @@ function resizeFloat32(
       const ix1 = sx1 < 0 ? 0 : sx1 >= srcW ? srcW - 1 : sx1
 
       const v = (1 - fy) * ((1 - fx) * src[iy0 * srcW + ix0] + fx * src[iy0 * srcW + ix1]) +
-                      fy  * ((1 - fx) * src[iy1 * srcW + ix0] + fx * src[iy1 * srcW + ix1])
+        fy * ((1 - fx) * src[iy1 * srcW + ix0] + fx * src[iy1 * srcW + ix1])
       dst[dy * dstW + dx] = v
     }
   }
   return dst
 }
+*/
 
 /**
  * ROI Cropper — maintains a stabilised bounding box of the person across frames.
@@ -225,7 +227,7 @@ export class RoiCropper {
 
         const v =
           (1 - fracY) * ((1 - fracX) * cropMask[row0 + ix0] + fracX * cropMask[row0 + ix1]) +
-          fracY        * ((1 - fracX) * cropMask[row1 + ix0] + fracX * cropMask[row1 + ix1])
+          fracY * ((1 - fracX) * cropMask[row1 + ix0] + fracX * cropMask[row1 + ix1])
 
         full[fy * fullW + fx] = v
       }

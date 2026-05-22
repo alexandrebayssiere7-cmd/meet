@@ -65,6 +65,7 @@ export class LandscapeSegmenter implements Segmenter {
           const out = this.buffers[this.bufIdx]
           this.bufIdx ^= 1
           out.set(fg)
+          result.close()
           resolve(out)
         }
       )

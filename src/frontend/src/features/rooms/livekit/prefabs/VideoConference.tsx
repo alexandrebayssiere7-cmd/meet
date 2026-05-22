@@ -139,8 +139,8 @@ export function VideoConference({ ...props }: VideoConferenceProps) {
         lastParticipant?.isLocal
           ? t('self.unpin')
           : t('unpin', {
-              name: announcementName,
-            })
+            name: announcementName,
+          })
       )
 
       lastPinnedParticipantIdentityRef.current = null
@@ -240,7 +240,7 @@ export function VideoConference({ ...props }: VideoConferenceProps) {
       {isWeb() && (
         <LayoutContextProvider
           value={layoutContext}
-          // onPinChange={handleFocusStateChange}
+        // onPinChange={handleFocusStateChange}
         >
           <ScreenShareErrorModal
             isOpen={isShareErrorVisible}
@@ -282,7 +282,7 @@ export function VideoConference({ ...props }: VideoConferenceProps) {
               if (
                 e.source == Track.Source.ScreenShare &&
                 e.error.toString() ==
-                  'NotAllowedError: Permission denied by system'
+                'NotAllowedError: Permission denied by system'
               ) {
                 setIsShareErrorVisible(true)
               }
