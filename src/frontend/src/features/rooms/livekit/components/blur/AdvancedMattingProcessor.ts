@@ -10,7 +10,7 @@ import {
 } from '.'
 import { PreProcessingPipeline } from './preprocessing/PreProcessingPipeline'
 import { BBox } from './preprocessing/RoiCropper'
-import { Segmenter, createSegmenter, RVMSegmenter, probeMediapipeDelegate } from './segmenters'
+import { Segmenter, createSegmenter, probeMediapipeDelegate } from './segmenters'
 import { WebGl2Renderer } from './renderers/WebGl2Renderer'
 import { pushMattingError } from './errors/MattingErrorStore'
 
@@ -50,20 +50,32 @@ interface FrameMaskPair {
  * All blur passes run in GLSL shaders — no ctx.filter (unreliable on Safari).
  */
 export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
+  /** Configured processor options (blur radius, virtual image, models). */
   options: ProcessorConfig
+  /** Unique name of the processor ('blur' or 'virtual'). */
   name: string
+  /** Discriminated processor type. */
   type: ProcessorType
+  /** Output MediaStreamTrack containing the WebGL2 composition stream. */
   processedTrack?: MediaStreamTrack
 
+  /** Original camera input video track. */
   source?: MediaStreamTrack
+  /** MediaTrackSettings of the source track (contains active width/height). */
   sourceSettings?: MediaTrackSettings
+  /** The source HTML5 <video> element. */
   videoElement?: HTMLVideoElement
+  /** True when the video element has loaded and started playing. */
   videoElementLoaded?: boolean
 
+  /** Offscreen or visible canvas displaying the final composted stream. */
   outputCanvas?: HTMLCanvasElement
 
+  /** Canvas used as a scratchpad for drawing resized segmenter frames. */
   segmentationMaskCanvas?: HTMLCanvasElement
+  /** 2D rendering context of the segmentation scratchpad. */
   segmentationMaskCanvasCtx?: CanvasRenderingContext2D
+  /** Extracted raw RGBA ImageData frame of the segmenter input. */
   sourceImageData?: ImageData
 
   // Full-res snapshot canvas: a single sync drawImage(videoElement) per
@@ -78,6 +90,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
   private static readonly MOTION_W = 128
   private static readonly MOTION_H = 72
 
+  /** The active segmentation model (e.g. MulticlassSegmenter or LandscapeSegmenter). */
   segmenter?: Segmenter
   private gpuRenderer?: WebGl2Renderer
   private _passthroughMask?: Float32Array
@@ -91,6 +104,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
   // ~inference-time latency). Higher = lower latency, halo bounded by N frames.
   private _maxFrameOffset = 0
 
+  /** Virtual background image element (preloaded when type is VIRTUAL). */
   virtualBackgroundImage?: HTMLImageElement
 
   private _configuredModel?: SegmentationModel
@@ -110,6 +124,14 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     this._maxFrameOffset = this._readMaxFrameOffset(opts)
   }
 
+  /**
+   * Extract and sanitise the `maxFrameOffset` value from a processor config.
+   * Non-finite, negative, or missing values default to 0 (strict frame-lock).
+   * The value is capped to 60 frames to avoid unreasonably stale compositing.
+   *
+   * @param opts Processor configuration to read.
+   * @returns    Validated frame-offset value in [0, 60].
+   */
   private _readMaxFrameOffset(opts: ProcessorConfig): number {
     if (opts.type === ProcessorType.BLUR || opts.type === ProcessorType.VIRTUAL) {
       const v = opts.maxFrameOffset
@@ -125,10 +147,19 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     return new Promise(resolve => this._readyResolvers.push(resolve))
   }
 
+  /**
+   * Resolve all pending `waitForReady()` promises and clear the resolver queue.
+   * Called once the first segmenter finishes initialising (or on failure/destroy).
+   */
   private _resolveReady() {
     this._readyResolvers.splice(0).forEach(r => r())
   }
 
+  /**
+   * Initializes the background matting processor. Sets up original video track,
+   * configures offscreen canvases, instantiates WebGL2 graphics renderers,
+   * starts segmenter/render loops, and starts pre-loading segmentation models in the background.
+   */
   async init(opts: ProcessorOptions<Track.Kind>) {
     this._destroyed = false
     if (!opts.element) {
@@ -235,6 +266,11 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     }
   }
 
+  /**
+   * Updates the processor dynamically with a new configuration.
+   * Enables seamless transitions between blur and virtual backgrounds, changes in
+   * blur intensity, post-processing options, or switching models on the fly.
+   */
   async update(opts: ProcessorConfig): Promise<void> {
     this.options = opts
     this.type = opts.type
@@ -273,6 +309,12 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
   }
 
 
+  /**
+   * Extract the segmentation model requested by a config, defaulting to AUTO.
+   *
+   * @param opts Processor configuration.
+   * @returns    Requested `SegmentationModel`.
+   */
   private _getModel(opts: ProcessorConfig): SegmentationModel {
     if (opts.type === ProcessorType.BLUR || opts.type === ProcessorType.VIRTUAL) {
       return opts.model ?? SegmentationModel.AUTO
@@ -280,6 +322,17 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     return SegmentationModel.AUTO
   }
 
+  /**
+   * Benchmark a freshly-initialised segmenter to decide whether it is fast enough
+   * for the AUTO model selection path.
+   *
+   * Runs 4 inference calls on a blank canvas and measures the average duration.
+   * The segmenter is considered "fast enough" if the average is ≤ 30 ms/frame.
+   * Skipped entirely when the GPU delegate is unavailable (CPU path would be too slow).
+   *
+   * @param seg An already-initialised `Segmenter` instance to benchmark.
+   * @returns   `true` if the model should be kept; `false` to fall back to Landscape.
+   */
   private async _benchmarkSegmenter(seg: Segmenter): Promise<boolean> {
     try {
       const probe = await probeMediapipeDelegate()
@@ -405,6 +458,13 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     }
   }
 
+  /**
+   * Extract the `rvmDownsampleRatio` from a processor config, or `undefined` if
+   * the config type does not support it (e.g. FACE_LANDMARKS).
+   *
+   * @param opts Processor configuration.
+   * @returns    Downsample ratio or `undefined`.
+   */
   private _getRvmRatio(opts: ProcessorConfig): number | undefined {
     if (opts.type === ProcessorType.BLUR || opts.type === ProcessorType.VIRTUAL) {
       return opts.rvmDownsampleRatio
@@ -412,6 +472,12 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     return undefined
   }
 
+  /**
+   * Compute an automatic RVM downsample ratio based on the camera resolution.
+   * Higher resolution → lower ratio → smaller model input → faster inference.
+   *
+   * @returns Ratio in {0.125, 0.25, 0.5}.
+   */
   private _autoRvmRatio(): number {
     const w = this.sourceSettings?.width ?? 1280
     if (w > 1920) return 0.125
@@ -419,6 +485,10 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     return 0.5
   }
 
+  /**
+   * Extract the post-processing configuration from the current options.
+   * Returns `{}` for processor types that do not support post-processing.
+   */
   private _getPostProcessingConfig(): PostProcessingConfig {
     if (
       this.options.type === ProcessorType.BLUR ||
@@ -429,6 +499,10 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     return {}
   }
 
+  /**
+   * Extract the upsampling configuration from the current options.
+   * Returns `{}` for processor types that do not support upsampling.
+   */
   private _getUpsamplingConfig(): UpsamplingConfig {
     if (
       this.options.type === ProcessorType.BLUR ||
@@ -439,6 +513,10 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     return {}
   }
 
+  /**
+   * Extract the pre-processing configuration from the current options.
+   * Returns `undefined` for processor types that do not support pre-processing.
+   */
   private _getPreProcessingConfig(): PreProcessingConfig | undefined {
     if (
       this.options.type === ProcessorType.BLUR ||
@@ -450,6 +528,12 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
   }
 
 
+  /**
+   * Push the current options (mode, blur radius, post-processing, upsampling,
+   * virtual background, pre-processing pipeline) to the GPU renderer.
+   * Also rebuilds the `PreProcessingPipeline` when ROI cropping is enabled.
+   * No-op if no GPU renderer is active (passthrough mode).
+   */
   private _applyRendererConfig() {
     if (!this.gpuRenderer) return
     const mode = this.options.type === ProcessorType.VIRTUAL ? 'virtual' : 'blur'
@@ -470,6 +554,15 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       preCfg?.roiCropping?.enabled ? new PreProcessingPipeline(preCfg) : undefined
   }
 
+  /**
+   * Asynchronously initialise the segmenter for the first time.
+   * For `AUTO`, starts with Multiclass and runs `_benchmarkSegmenter`; falls
+   * back to Landscape if the benchmark fails or if the GPU delegate is CPU.
+   * Stale initialisations are cancelled via `_pendingModel` guard.
+   * Sets `this.segmenter` and resolves `waitForReady()` on completion.
+   *
+   * @param model Requested segmentation model (may be AUTO).
+   */
   private async _initSegmenterBackground(model: SegmentationModel) {
     if (this._destroyed) return
     this._pendingModel = model
@@ -528,6 +621,14 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     }
   }
 
+  /**
+   * Hot-swap the active segmenter for a new model while the render loop keeps running.
+   * Initialises the new segmenter in the background; once ready it atomically replaces
+   * `this.segmenter` and destroys the old one. Stale switches are cancelled via the
+   * `_pendingModel` guard.
+   *
+   * @param model New target segmentation model.
+   */
   private async _switchSegmenterBackground(model: SegmentationModel) {
     if (this._destroyed) return
     this._pendingModel = model
@@ -587,6 +688,11 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     }
   }
 
+  /**
+   * Resize the segmentation canvas and GPU processing textures to match the new
+   * segmenter's input dimensions. Also invalidates the stale `_latestPair` so the
+   * render loop falls back to passthrough until the first mask at the new size arrives.
+   */
   private _resizeMaskIfNeeded() {
     this.segmentationMaskCanvas?.setAttribute('width', '' + this.processingWidth)
     this.segmentationMaskCanvas?.setAttribute('height', '' + this.processingHeight)
@@ -600,6 +706,13 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     }
   }
 
+  /**
+   * Create (or reuse) an `<img>` element for the virtual background.
+   * The image is loaded asynchronously; the renderer uploads it lazily on the
+   * next `render()` call once `img.complete` is true. If the image fails to load,
+   * a `VIRTUAL_BG_LOAD_FAILED` error is pushed to the error store.
+   * Clears the image when the processor type is not VIRTUAL.
+   */
   private _initVirtualBackgroundImage() {
     if (this.options.type !== ProcessorType.VIRTUAL) {
       this.virtualBackgroundImage = undefined
@@ -625,6 +738,11 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
 
   // ─── Two-loop engine ────────────────────────────────────────────────────────
 
+  /**
+   * Start the segmenter loop and render loop once the output canvas stream is ready.
+   * If the video element already has data, launches immediately; otherwise waits
+   * for the `loadeddata` event.
+   */
   private _startLoops(): void {
     if (this._destroyed) return
     if (this.videoElementLoaded || this.videoElement!.readyState >= 2) {
@@ -637,6 +755,10 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     }
   }
 
+  /**
+   * Actually launch both processing loops. Must only be called once per processor
+   * lifecycle (subsequent calls are no-ops due to `_destroyed` guard).
+   */
   private _launch(): void {
     if (this._destroyed) return
     this.videoElementLoaded = true
@@ -748,6 +870,12 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
   private static readonly RENDER_TARGET_MS = 1000 / 50
   private _lastRenderTime = 0
 
+  /**
+   * Schedule the next render frame via `requestAnimationFrame`.
+   * Self-reschedules recursively as long as `_segLoopActive` is true.
+   * Throttled to `RENDER_TARGET_MS` (~20 ms / 50 fps) to avoid redundant renders
+   * when the browser fires rAF at a higher rate.
+   */
   private _scheduleRender(): void {
     if (!this._segLoopActive) return
     this._renderLoopHandle = requestAnimationFrame((now) => {
@@ -759,12 +887,25 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     })
   }
 
+  /**
+   * Cancel any pending `requestAnimationFrame` callback and clear the handle.
+   */
   private _cancelRender(): void {
     if (this._renderLoopHandle === null) return
     cancelAnimationFrame(this._renderLoopHandle)
     this._renderLoopHandle = null
   }
 
+  /**
+   * Composite one output frame. Called by the render loop at ~50 fps.
+   *
+   * - No mask yet → render passthrough (uniform-1 mask, no halo possible).
+   * - `_maxFrameOffset > 0` and mask is fresh → use live `<video>` frame
+   *   (lower latency, bounded halo risk).
+   * - Default → frame-locked mode: apply the mask to the exact `ImageBitmap` it
+   *   was computed from (zero halo, latency = last inference time).
+   * Resizes the output canvas automatically if the camera resolution changes.
+   */
   private _renderFrame(): void {
     if (!this.gpuRenderer || !this.videoElement || this.videoElement.videoWidth === 0) return
     const pair = this._latestPair
@@ -868,6 +1009,13 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     return this._snapshotCanvas
   }
 
+  /**
+   * Downscale the current snapshot to 128×72 and read its RGBA pixels.
+   * This low-resolution frame is fed to `RoiCropper._hasMotionOutsideBbox()`
+   * for cheap luma-based motion detection.
+   *
+   * @returns RGBA pixel data (length = 128*72*4) or `null` if no snapshot exists.
+   */
   private _getMotionFrameRgba(): Uint8ClampedArray | null {
     if (!this._snapshotCanvas) return null
     const mw = AdvancedMattingProcessor.MOTION_W
@@ -885,6 +1033,11 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     return this._motionCanvasCtx!.getImageData(0, 0, mw, mh).data
   }
 
+  /**
+   * Render a fully transparent (passthrough) frame by uploading a uniform-1 mask.
+   * Used when no segmentation mask is available yet (during initialisation) or
+   * when the segmenter is running in passthrough fallback mode.
+   */
   private _drawPassthrough() {
     if (!this.gpuRenderer || !this.videoElement) return
     const w = this.processingWidth
@@ -896,6 +1049,14 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     this.gpuRenderer.render(this.videoElement)
   }
 
+  /**
+   * Find or create the main output canvas at the given dimensions.
+   * Re-uses the existing DOM canvas (by ID) to avoid detaching a live
+   * `captureStream()` track on hot-reloads or processor restarts.
+   *
+   * @param w Canvas width in pixels (= camera frame width).
+   * @param h Canvas height in pixels (= camera frame height).
+   */
   private _createMainCanvasWithSize(w: number, h: number) {
     let canvas = document.querySelector(
       `canvas#${BLUR_CANVAS_ID}`
@@ -909,6 +1070,11 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     this.outputCanvas = canvas
   }
 
+  /**
+   * Find or create the segmentation scratchpad canvas at the current processing
+   * resolution. Uses `willReadFrequently: true` so the browser optimises for
+   * repeated `getImageData()` calls.
+   */
   private _createMaskCanvas() {
     let canvas = document.querySelector(
       `#${SEGMENTATION_MASK_CANVAS_ID}`
@@ -929,6 +1095,15 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     })!
   }
 
+  /**
+   * Create a new `<canvas>` element with the given ID and dimensions.
+   * The element is not attached to the DOM.
+   *
+   * @param id     HTML `id` attribute to assign (used for re-use lookups).
+   * @param width  Canvas width in pixels.
+   * @param height Canvas height in pixels.
+   * @returns      The newly created `<canvas>` element.
+   */
   private _createCanvas(id: string, width: number, height: number) {
     const el = document.createElement('canvas')
     el.setAttribute('id', id)
@@ -937,11 +1112,22 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     return el
   }
 
+  /**
+   * Destroy the current processor instance and re-initialise it with new options.
+   * Useful when the source track changes (e.g. camera switch).
+   *
+   * @param opts New processor options (track + element).
+   */
   async restart(opts: ProcessorOptions<Track.Kind>) {
     await this.destroy()
     return this.init(opts)
   }
 
+  /**
+   * Destroys the background processor. Stops the render loop, terminates the
+   * timing web worker, closes WebGL2 renderers and active segmenters, and releases
+   * captured tracks.
+   */
   async destroy() {
     this._destroyed = true
     this._pendingModel = undefined

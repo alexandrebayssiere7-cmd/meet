@@ -177,81 +177,6 @@ export const EffectsConfiguration = ({
   } = usePersistentUserChoices()
 
   // ----- Advanced matting settings (model + pre/post-processing toggles) -----
-  const initialModel: SegmentationModel =
-    (processorConfig &&
-      (processorConfig.type === ProcessorType.BLUR ||
-        processorConfig.type === ProcessorType.VIRTUAL) &&
-      processorConfig.model) ||
-    SegmentationModel.AUTO
-  const initialPP: PostProcessingConfig =
-    (processorConfig &&
-      (processorConfig.type === ProcessorType.BLUR ||
-        processorConfig.type === ProcessorType.VIRTUAL) &&
-      processorConfig.postProcessing) ||
-    {}
-  const initialUP: UpsamplingConfig =
-    (processorConfig &&
-      (processorConfig.type === ProcessorType.BLUR ||
-        processorConfig.type === ProcessorType.VIRTUAL) &&
-      processorConfig.upsampling) ||
-    {}
-  const initialPRE: PreProcessingConfig =
-    (processorConfig &&
-      (processorConfig.type === ProcessorType.BLUR ||
-        processorConfig.type === ProcessorType.VIRTUAL) &&
-      processorConfig.preProcessing) ||
-    {}
-  const [roiCroppingEnabled, setRoiCroppingEnabled] = useState(
-    !!initialPRE.roiCropping?.enabled
-  )
-  const [model, setModel] = useState<SegmentationModel>(initialModel)
-  const initialRvmRatio: number | undefined =
-    processorConfig &&
-    (processorConfig.type === ProcessorType.BLUR ||
-      processorConfig.type === ProcessorType.VIRTUAL)
-      ? processorConfig.rvmDownsampleRatio
-      : undefined
-  const [rvmManual, setRvmManual] = useState<boolean>(
-    initialRvmRatio !== undefined
-  )
-  const [rvmRatio, setRvmRatio] = useState<number>(initialRvmRatio ?? 0.25)
-  const [sigmoidEnabled, setSigmoidEnabled] = useState(!!initialPP.sigmoid)
-  const [sigmoidSteepness, setSigmoidSteepness] = useState<number>(
-    initialPP.sigmoid?.steepness ?? 10
-  )
-  const [sigmoidThreshold, setSigmoidThreshold] = useState<number>(
-    initialPP.sigmoid?.threshold ?? 0.5
-  )
-  const [erosionEnabled, setErosionEnabled] = useState(!!initialPP.erosion)
-  const [erosionPixels, setErosionPixels] = useState<number>(
-    initialPP.erosion?.pixels ?? 2
-  )
-  const [upsamplingGuided, setUpsamplingGuided] = useState(
-    initialUP.method === 'guided'
-  )
-  const [upsamplingRadius, setUpsamplingRadius] = useState<number>(
-    initialUP.radius ?? 8
-  )
-  const [upsamplingEpsLog, setUpsamplingEpsLog] = useState<number>(
-    Math.log10(initialUP.eps ?? 0.01)
-  )
-  const [emaEnabled, setEmaEnabled] = useState(!!initialPP.ema)
-  const [emaAlpha, setEmaAlpha] = useState<number>(
-    initialPP.ema?.alpha ?? 0.5
-  )
-  const [closingEnabled, setClosingEnabled] = useState(!!initialPP.closing)
-  const [closingRadius, setClosingRadius] = useState<number>(
-    initialPP.closing?.radius ?? 0
-  )
-  const initialMaxFrameOffset: number =
-    (processorConfig &&
-      (processorConfig.type === ProcessorType.BLUR ||
-        processorConfig.type === ProcessorType.VIRTUAL) &&
-      processorConfig.maxFrameOffset) ||
-    0
-  const [maxFrameOffset, setMaxFrameOffset] =
-    useState<number>(initialMaxFrameOffset)
-
   // Continuous blur radius slider; only meaningful when a blur effect is selected.
   const initialBlurRadius =
     processorConfig?.type === ProcessorType.BLUR
@@ -261,40 +186,26 @@ export const EffectsConfiguration = ({
     useState<number>(initialBlurRadius)
 
   const buildPreProcessing = useCallback((): PreProcessingConfig => {
-    const cfg: PreProcessingConfig = {}
-    if (roiCroppingEnabled) cfg.roiCropping = { enabled: true }
-    return cfg
-  }, [roiCroppingEnabled])
+    return {
+      roiCropping: { enabled: true },
+    }
+  }, [])
 
   const buildPostProcessing = useCallback((): PostProcessingConfig => {
-    const cfg: PostProcessingConfig = {}
-    if (sigmoidEnabled)
-      cfg.sigmoid = { steepness: sigmoidSteepness, threshold: sigmoidThreshold }
-    if (erosionEnabled && erosionPixels > 0)
-      cfg.erosion = { pixels: erosionPixels }
-    if (emaEnabled) cfg.ema = { alpha: emaAlpha }
-    if (closingEnabled) cfg.closing = { radius: closingRadius }
-    return cfg
-  }, [
-    sigmoidEnabled,
-    sigmoidSteepness,
-    sigmoidThreshold,
-    erosionEnabled,
-    erosionPixels,
-    emaEnabled,
-    emaAlpha,
-    closingEnabled,
-    closingRadius,
-  ])
+    return {
+      erosion: { pixels: 3 },
+      ema: { alpha: 0.7 },
+      closing: { radius: 3 },
+    }
+  }, [])
 
   const buildUpsampling = useCallback((): UpsamplingConfig => {
-    if (!upsamplingGuided) return { method: 'bilinear' }
     return {
       method: 'guided',
-      radius: upsamplingRadius,
-      eps: Math.pow(10, upsamplingEpsLog),
+      radius: 8,
+      eps: 0.01,
     }
-  }, [upsamplingGuided, upsamplingRadius, upsamplingEpsLog])
+  }, [])
 
   const withAdvanced = useCallback(
     (config: ProcessorConfig): ProcessorConfig => {
@@ -304,20 +215,16 @@ export const EffectsConfiguration = ({
       ) {
         return {
           ...config,
-          model,
+          model: SegmentationModel.AUTO,
           preProcessing: buildPreProcessing(),
-          rvmDownsampleRatio:
-            model === SegmentationModel.RVM && rvmManual
-              ? rvmRatio
-              : undefined,
           postProcessing: buildPostProcessing(),
           upsampling: buildUpsampling(),
-          maxFrameOffset,
+          maxFrameOffset: 0,
         }
       }
       return config
     },
-    [model, buildPreProcessing, rvmManual, rvmRatio, buildPostProcessing, buildUpsampling, maxFrameOffset]
+    [buildPreProcessing, buildPostProcessing, buildUpsampling]
   )
 
   const selectedId = useMemo(
@@ -460,28 +367,6 @@ export const EffectsConfiguration = ({
       withAdvanced,
     ]
   )
-
-  const applyAdvancedSettings = useCallback(async () => {
-    if (!videoTrack || !processorConfig) return
-    if (
-      processorConfig.type !== ProcessorType.BLUR &&
-      processorConfig.type !== ProcessorType.VIRTUAL
-    )
-      return
-    const processor =
-      videoTrack.getProcessor() as BackgroundProcessorInterface | undefined
-    if (!processor) return
-    const newConfig = withAdvanced(processorConfig)
-    setProcessorPending(true)
-    try {
-      await processor.update(newConfig)
-      // Wait until the new segmenter is fully loaded before clearing the spinner.
-      await processor.waitForReady?.()
-      saveProcessorConfig(newConfig)
-    } finally {
-      setTimeout(() => setProcessorPending(false))
-    }
-  }, [videoTrack, processorConfig, withAdvanced, saveProcessorConfig])
 
   // Live blur radius slider: debounced apply that doesn't go through toggleEffect
   // (which would stop the processor when slider sits on the same value as selected).
@@ -1183,392 +1068,7 @@ export const EffectsConfiguration = ({
                 </div>
               </div>
 
-              {/* Advanced matting settings */}
-              <div
-                className={css({
-                  marginTop: '1.5rem',
-                  paddingTop: '1rem',
-                  borderTop: '1px solid greyscale.250',
-                })}
-              >
-                <H
-                  lvl={2}
-                  style={{ marginBottom: '0.6rem' }}
-                  variant="bodyXsBold"
-                >
-                  {t('advanced.title')}
-                </H>
 
-                <H
-                  lvl={3}
-                  style={{ marginBottom: '0.4rem' }}
-                  variant="bodyXsMedium"
-                >
-                  {t('advanced.model.title')}
-                </H>
-                <div
-                  className={css({
-                    display: 'flex',
-                    gap: '1rem',
-                    marginBottom: '1rem',
-                  })}
-                >
-                  <label
-                    className={css({
-                      display: 'flex',
-                      gap: '0.4rem',
-                      alignItems: 'center',
-                      cursor: 'pointer',
-                    })}
-                  >
-                    <input
-                      type="radio"
-                      name="matting-model"
-                      checked={model === SegmentationModel.AUTO}
-                      onChange={() => setModel(SegmentationModel.AUTO)}
-                    />
-                    <Text variant="sm">{t('advanced.model.auto')}</Text>
-                  </label>
-                  <label
-                    className={css({
-                      display: 'flex',
-                      gap: '0.4rem',
-                      alignItems: 'center',
-                      cursor: 'pointer',
-                    })}
-                  >
-                    <input
-                      type="radio"
-                      name="matting-model"
-                      checked={model === SegmentationModel.LANDSCAPE}
-                      onChange={() => setModel(SegmentationModel.LANDSCAPE)}
-                    />
-                    <Text variant="sm">{t('advanced.model.landscape')}</Text>
-                  </label>
-                  <label
-                    className={css({
-                      display: 'flex',
-                      gap: '0.4rem',
-                      alignItems: 'center',
-                      cursor: 'pointer',
-                    })}
-                  >
-                    <input
-                      type="radio"
-                      name="matting-model"
-                      checked={model === SegmentationModel.MULTICLASS}
-                      onChange={() => setModel(SegmentationModel.MULTICLASS)}
-                    />
-                    <Text variant="sm">{t('advanced.model.multiclass')}</Text>
-                  </label>
-                  <label
-                    className={css({
-                      display: 'flex',
-                      gap: '0.4rem',
-                      alignItems: 'center',
-                      cursor: 'pointer',
-                    })}
-                  >
-                    <input
-                      type="radio"
-                      name="matting-model"
-                      checked={model === SegmentationModel.RVM}
-                      onChange={() => setModel(SegmentationModel.RVM)}
-                    />
-                    <Text variant="sm">{t('advanced.model.rvm')}</Text>
-                  </label>
-                </div>
-
-                {model === SegmentationModel.RVM && (
-                  <div
-                    className={css({
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '0.35rem',
-                      marginBottom: '0.8rem',
-                    })}
-                  >
-                    <label
-                      className={css({
-                        display: 'flex',
-                        gap: '0.4rem',
-                        alignItems: 'center',
-                        cursor: 'pointer',
-                      })}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={rvmManual}
-                        onChange={(e) => setRvmManual(e.target.checked)}
-                      />
-                      <Text variant="sm">
-                        {t('advanced.rvmDownsample.manual')}
-                      </Text>
-                    </label>
-                    <SliderRow
-                      label={t('advanced.rvmDownsample.label')}
-                      displayValue={rvmRatio.toFixed(3)}
-                      value={rvmRatio}
-                      min={0.125}
-                      max={1.0}
-                      step={0.125}
-                      disabled={!rvmManual}
-                      onChange={setRvmRatio}
-                    />
-                  </div>
-                )}
-
-                <H
-                  lvl={3}
-                  style={{ marginBottom: '0.4rem' }}
-                  variant="bodyXsMedium"
-                >
-                  {t('advanced.sync.title')}
-                </H>
-                <div
-                  className={css({
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '0.35rem',
-                    marginBottom: '1rem',
-                  })}
-                >
-                  <SliderRow
-                    label={t('advanced.params.maxFrameOffset')}
-                    displayValue={
-                      maxFrameOffset === 0
-                        ? t('advanced.params.maxFrameOffsetStrict')
-                        : `${maxFrameOffset}`
-                    }
-                    value={maxFrameOffset}
-                    min={0}
-                    max={10}
-                    step={1}
-                    onChange={setMaxFrameOffset}
-                  />
-                </div>
-
-                <H
-                  lvl={3}
-                  style={{ marginBottom: '0.4rem' }}
-                  variant="bodyXsMedium"
-                >
-                  {t('advanced.preProcessing.title')}
-                </H>
-                <div
-                  className={css({
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '0.35rem',
-                    marginBottom: '1rem',
-                  })}
-                >
-                  <label
-                    className={css({
-                      display: 'flex',
-                      gap: '0.4rem',
-                      alignItems: 'center',
-                      cursor: 'pointer',
-                    })}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={roiCroppingEnabled}
-                      onChange={(e) => setRoiCroppingEnabled(e.target.checked)}
-                    />
-                    <Text variant="sm">{t('advanced.preProcessing.roiCropping')}</Text>
-                  </label>
-                </div>
-
-                <H
-                  lvl={3}
-                  style={{ marginBottom: '0.4rem' }}
-                  variant="bodyXsMedium"
-                >
-                  {t('advanced.postProcessing.title')}
-                </H>
-                <div
-                  className={css({
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '0.35rem',
-                  })}
-                >
-                  <label
-                    className={css({
-                      display: 'flex',
-                      gap: '0.4rem',
-                      alignItems: 'center',
-                      cursor: 'pointer',
-                    })}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={sigmoidEnabled}
-                      onChange={(e) => setSigmoidEnabled(e.target.checked)}
-                    />
-                    <Text variant="sm">{t('advanced.postProcessing.sigmoid')}</Text>
-                  </label>
-                  <SliderRow
-                    label={t('advanced.params.sigmoidSteepness')}
-                    displayValue={sigmoidSteepness.toFixed(1)}
-                    value={sigmoidSteepness}
-                    min={0.5}
-                    max={20}
-                    step={0.5}
-                    disabled={!sigmoidEnabled}
-                    onChange={setSigmoidSteepness}
-                  />
-                  <SliderRow
-                    label={t('advanced.params.sigmoidThreshold')}
-                    displayValue={sigmoidThreshold.toFixed(2)}
-                    value={sigmoidThreshold}
-                    min={0.2}
-                    max={0.8}
-                    step={0.05}
-                    disabled={!sigmoidEnabled}
-                    onChange={setSigmoidThreshold}
-                  />
-                  <label
-                    className={css({
-                      display: 'flex',
-                      gap: '0.4rem',
-                      alignItems: 'center',
-                      cursor: 'pointer',
-                    })}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={erosionEnabled}
-                      onChange={(e) => setErosionEnabled(e.target.checked)}
-                    />
-                    <Text variant="sm">{t('advanced.postProcessing.erosion')}</Text>
-                  </label>
-                  <SliderRow
-                    label={t('advanced.params.erosionPixels')}
-                    displayValue={`${erosionPixels} px`}
-                    value={erosionPixels}
-                    min={0}
-                    max={6}
-                    step={1}
-                    disabled={!erosionEnabled}
-                    onChange={setErosionPixels}
-                  />
-                  <label
-                    className={css({
-                      display: 'flex',
-                      gap: '0.4rem',
-                      alignItems: 'center',
-                      cursor: 'pointer',
-                    })}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={emaEnabled}
-                      onChange={(e) => setEmaEnabled(e.target.checked)}
-                    />
-                    <Text variant="sm">{t('advanced.postProcessing.ema')}</Text>
-                  </label>
-                  <SliderRow
-                    label={t('advanced.params.emaAlpha')}
-                    displayValue={emaAlpha.toFixed(2)}
-                    value={emaAlpha}
-                    min={0.05}
-                    max={1.0}
-                    step={0.05}
-                    disabled={!emaEnabled}
-                    onChange={setEmaAlpha}
-                  />
-                  <label
-                    className={css({
-                      display: 'flex',
-                      gap: '0.4rem',
-                      alignItems: 'center',
-                      cursor: 'pointer',
-                    })}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={closingEnabled}
-                      onChange={(e) => setClosingEnabled(e.target.checked)}
-                    />
-                    <Text variant="sm">{t('advanced.postProcessing.holeFilling')}</Text>
-                  </label>
-                  <SliderRow
-                    label={t('advanced.params.holeFillingRadius')}
-                    displayValue={`${closingRadius} px`}
-                    value={closingRadius}
-                    min={0}
-                    max={8}
-                    step={1}
-                    disabled={!closingEnabled}
-                    onChange={setClosingRadius}
-                  />
-                </div>
-                <H
-                  lvl={3}
-                  style={{ marginBottom: '0.4rem', marginTop: '0.75rem' }}
-                  variant="bodyXsMedium"
-                >
-                  {t('advanced.upsampling.title')}
-                </H>
-                <div
-                  className={css({
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '0.35rem',
-                  })}
-                >
-                  <label
-                    className={css({
-                      display: 'flex',
-                      gap: '0.4rem',
-                      alignItems: 'center',
-                      cursor: 'pointer',
-                    })}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={upsamplingGuided}
-                      onChange={(e) => setUpsamplingGuided(e.target.checked)}
-                    />
-                    <Text variant="sm">{t('advanced.upsampling.guidedFilter')}</Text>
-                  </label>
-                  <SliderRow
-                    label={t('advanced.params.upsamplingRadius')}
-                    displayValue={String(upsamplingRadius)}
-                    value={upsamplingRadius}
-                    min={2}
-                    max={32}
-                    step={1}
-                    disabled={!upsamplingGuided}
-                    onChange={setUpsamplingRadius}
-                  />
-                  <SliderRow
-                    label={t('advanced.params.upsamplingEps')}
-                    displayValue={Math.pow(10, upsamplingEpsLog).toExponential(1)}
-                    value={upsamplingEpsLog}
-                    min={-4}
-                    max={-1.3}
-                    step={0.1}
-                    disabled={!upsamplingGuided}
-                    onChange={setUpsamplingEpsLog}
-                  />
-                </div>
-                {processorConfig &&
-                  (processorConfig.type === ProcessorType.BLUR ||
-                    processorConfig.type === ProcessorType.VIRTUAL) && (
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onPress={applyAdvancedSettings}
-                      isDisabled={processorOptions.isDisabled}
-                      style={{ marginTop: '0.75rem' }}
-                    >
-                      {t('advanced.apply')}
-                    </Button>
-                  )}
-              </div>
             </div>
           </div>
         ) : (

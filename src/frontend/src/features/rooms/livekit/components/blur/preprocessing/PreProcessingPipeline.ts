@@ -73,6 +73,10 @@ export class PreProcessingPipeline {
     return full
   }
 
+  /**
+   * Reset all stateful pre-processors (e.g. RoiCropper bbox history).
+   * Should be called when the segmenter model or processing resolution changes.
+   */
   reset(): void {
     this.roiCropper?.reset()
   }

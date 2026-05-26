@@ -23,6 +23,11 @@ export class MulticlassSegmenter implements Segmenter {
   // Reusable output buffer — avoids per-frame Float32Array allocation.
   private _maskBuffer?: Float32Array
 
+  /**
+   * Download the model, probe GPU delegate support, and initialise the
+   * MediaPipe ImageSegmenter in VIDEO mode with confidence masks enabled.
+   * Pushes `MEDIAPIPE_INIT_FAILED` and re-throws on failure.
+   */
   async init() {
     try {
       const [fileset, delegate] = await Promise.all([
@@ -48,6 +53,16 @@ export class MulticlassSegmenter implements Segmenter {
     }
   }
 
+  /**
+   * Run segmentation on one video frame.
+   * `confidenceMasks[0]` is the background probability; the person mask is
+   * derived as `1 - background`. The result is copied into a reusable buffer
+   * before resolving. The call races against a 2-second timeout.
+   *
+   * @param imageData   RGBA frame at the model's input resolution (256×256).
+   * @param timestampMs Frame capture time in milliseconds.
+   * @returns Float32Array mask [0, 1], length = 256*256. Values close to 1 = person.
+   */
   async segment(
     imageData: ImageData,
     timestampMs: number
@@ -79,6 +94,10 @@ export class MulticlassSegmenter implements Segmenter {
     return Promise.race([segPromise, timeout])
   }
 
+  /**
+   * Close the MediaPipe ImageSegmenter and free its GPU/WASM resources.
+   * The instance must not be used after this call.
+   */
   destroy() {
     this.imageSegmenter?.close()
     this.imageSegmenter = undefined

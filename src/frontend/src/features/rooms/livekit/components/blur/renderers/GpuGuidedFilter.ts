@@ -239,6 +239,15 @@ export class GpuGuidedFilter {
   private uSolve!: { uStats1: WebGLUniformLocation | null; uStats2: WebGLUniformLocation | null; uStats3: WebGLUniformLocation | null; uStats4: WebGLUniformLocation | null; uEps: WebGLUniformLocation | null }
   private uApply!: { uVideo: WebGLUniformLocation | null; uCoeffMean: WebGLUniformLocation | null }
 
+  /**
+   * Create a GpuGuidedFilter for the given WebGL2 context and output dimensions.
+   * Allocates all intermediate RGBA32F textures and FBOs, compiles and links
+   * all GLSL programs. Throws if `EXT_color_buffer_float` is unavailable.
+   *
+   * @param gl    An active WebGL2 rendering context.
+   * @param outW  Output width in pixels (same as guide image width).
+   * @param outH  Output height in pixels (same as guide image height).
+   */
   constructor(gl: WebGL2RenderingContext, outW: number, outH: number) {
     this.gl = gl
     this.outW = outW
@@ -396,6 +405,10 @@ export class GpuGuidedFilter {
     return this.gfOut
   }
 
+  /**
+   * Delete all GPU resources (textures, FBOs, programs) held by this filter.
+   * The instance must not be used after calling this method.
+   */
   destroy() {
     const gl = this.gl
     const textures = [
@@ -417,6 +430,11 @@ export class GpuGuidedFilter {
 
   // ─── internals ────────────────────────────────────────────────────────────
 
+  /**
+   * Allocate all textures, FBOs, and compile all shader programs.
+   * Called once in the constructor. Throws on unsupported extensions or
+   * shader compilation / program linking errors.
+   */
   private _build() {
     const gl = this.gl
 
@@ -522,6 +540,13 @@ export class GpuGuidedFilter {
     }
   }
 
+  /**
+   * Compile a single GLSL shader stage. Throws with the info log on failure.
+   *
+   * @param stage Either `gl.VERTEX_SHADER` or `gl.FRAGMENT_SHADER`.
+   * @param src   GLSL source code string.
+   * @returns     The compiled `WebGLShader`.
+   */
   private _compile(stage: number, src: string): WebGLShader {
     const gl = this.gl
     const sh = gl.createShader(stage)!
@@ -535,6 +560,14 @@ export class GpuGuidedFilter {
     return sh
   }
 
+  /**
+   * Link a vertex + fragment shader into a `WebGLProgram`. Throws on failure.
+   * The individual shaders are deleted after linking regardless of outcome.
+   *
+   * @param vsSrc Vertex shader GLSL source.
+   * @param fsSrc Fragment shader GLSL source.
+   * @returns     The linked `WebGLProgram`.
+   */
   private _link(vsSrc: string, fsSrc: string): WebGLProgram {
     const gl = this.gl
     const vs = this._compile(gl.VERTEX_SHADER, vsSrc)

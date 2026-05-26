@@ -18,39 +18,66 @@ const PROCESSING_HEIGHT = 144 * 3
 
 const FACE_LANDMARKS_CANVAS_ID = 'face-landmarks-local'
 
+/**
+ * Configuration options for the FaceLandmarksProcessor.
+ */
 export type FaceLandmarksOptions = {
+  /** If true, overlay glasses on the user's eyes. */
   showGlasses: boolean
+  /** If true, overlay a beret and a mustache (French theme) on the user's face. */
   showFrench: boolean
 }
 
+/**
+ * TrackProcessor that overlays 2D asset decals (glasses, beret, moustache)
+ * onto a local video track using MediaPipe FaceLandmaker landmarks.
+ */
 export class FaceLandmarksProcessor implements TrackProcessor<Track.Kind> {
+  /** Active options (which assets to overlay). */
   options: FaceLandmarksOptions
+  /** Unique name of the processor. */
   name: string
+  /** Output video track containing the rendered effects canvas. */
   processedTrack?: MediaStreamTrack | undefined
 
+  /** Original input video track. */
   source?: MediaStreamTrack
+  /** Settings of the input video track (width, height, etc.). */
   sourceSettings?: MediaTrackSettings
+  /** The source HTML5 <video> element. */
   videoElement?: HTMLVideoElement
+  /** True when the video element has loaded and started playing. */
   videoElementLoaded?: boolean
 
-  // Canvas containing the video processing result
+  /** Offscreen Canvas containing the final processed result. */
   outputCanvas?: HTMLCanvasElement
+  /** Context 2D of the output canvas. */
   outputCanvasCtx?: CanvasRenderingContext2D
 
+  /** Instance of MediaPipe FaceLandmarker for face tracking. */
   faceLandmarker?: FaceLandmarker
+  /** Last detected face landmark coordinates. */
   faceLandmarkerResult?: FaceLandmarkerResult
 
-  // The resized image of the video source
+  /** Current frame's resized raw image data used as model input. */
   sourceImageData?: ImageData
 
+  /** Dedicated worker for custom timing loops (avoiding background tab throttling). */
   timerWorker?: Worker
 
+  /** Discriminated processor type. */
   type: ProcessorType
 
-  // Effect images
+  /** Glasses decal image element. */
   glassesImage?: HTMLImageElement
+  /** Mustache decal image element. */
   mustacheImage?: HTMLImageElement
+  /** Beret decal image element. */
   beretImage?: HTMLImageElement
+
+  /**
+   * Creates an instance of FaceLandmarksProcessor.
+   */
   constructor(opts: FaceLandmarksOptions) {
     this.name = 'face_landmarks'
     this.options = opts
@@ -58,6 +85,10 @@ export class FaceLandmarksProcessor implements TrackProcessor<Track.Kind> {
     this._initEffectImages()
   }
 
+  /**
+   * Preload all effect decal images (glasses, mustache, beret) in the background
+   * so they are ready when the first frame is processed.
+   */
   private _initEffectImages() {
     this.glassesImage = new Image()
     this.glassesImage.src = '/assets/glasses.png'
@@ -76,6 +107,10 @@ export class FaceLandmarksProcessor implements TrackProcessor<Track.Kind> {
     return true // Face landmarks should work in all modern browsers
   }
 
+  /**
+   * Initializes the processor with the video track options and media elements.
+   * Sets up the canvas, face landmarker model, and custom timer worker.
+   */
   async init(opts: ProcessorOptions<Track.Kind>) {
     if (!opts.element) {
       throw new Error('Element is required for processing')
@@ -100,6 +135,14 @@ export class FaceLandmarksProcessor implements TrackProcessor<Track.Kind> {
     posthog.capture('face-landmarks-init')
   }
 
+  /**
+   * Create the `TimerWorker` Web Worker and hook it up to the processing loop.
+   * The worker fires a `TIMEOUT_TICK` message every `1000/30` ms (~33 ms)
+   * regardless of whether the tab is in the background, avoiding the browser's
+   * throttling of `setInterval` in inactive tabs.
+   * If the video element is already loaded, the timer starts immediately;
+   * otherwise it waits for the `loadeddata` event.
+   */
   _initWorker() {
     this.timerWorker = new Worker(timerWorkerScript, {
       name: 'FaceLandmarks',
@@ -121,12 +164,23 @@ export class FaceLandmarksProcessor implements TrackProcessor<Track.Kind> {
     }
   }
 
+  /**
+   * Handle messages from the `TimerWorker`. Dispatches a new processing tick
+   * on every `TIMEOUT_TICK` message, which fires at ~30 fps.
+   *
+   * @param response Worker message event containing `data.id`.
+   */
   onTimerMessage(response: { data: { id: number } }) {
     if (response.data.id === TIMEOUT_TICK) {
       this.process()
     }
   }
 
+  /**
+   * Download and initialise the MediaPipe FaceLandmarker model in VIDEO mode.
+   * Requests GPU delegate and enables both face blend-shapes and facial
+   * transformation matrices outputs.
+   */
   async initFaceLandmarker() {
     const vision = await FilesetResolver.forVisionTasks(
       'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm'
@@ -143,6 +197,11 @@ export class FaceLandmarksProcessor implements TrackProcessor<Track.Kind> {
     })
   }
 
+  /**
+   * Draw the current video frame onto the output canvas at the processing
+   * resolution (768×432) and capture it as `sourceImageData` for use by
+   * the face landmark detector.
+   */
   async sizeSource() {
     this.outputCanvasCtx?.drawImage(
       this.videoElement!,
@@ -164,6 +223,11 @@ export class FaceLandmarksProcessor implements TrackProcessor<Track.Kind> {
     )
   }
 
+  /**
+   * Run face landmark detection on the current `sourceImageData` using the
+   * MediaPipe FaceLandmarker in VIDEO mode. Stores the result in
+   * `faceLandmarkerResult` for use by `drawFaceLandmarks()`.
+   */
   async detectFaces() {
     const startTimeMs = performance.now()
     this.faceLandmarkerResult = this.faceLandmarker!.detectForVideo(
@@ -172,6 +236,19 @@ export class FaceLandmarksProcessor implements TrackProcessor<Track.Kind> {
     )
   }
 
+  /**
+   * Draw a decal image centred and rotated between two facial landmark points.
+   *
+   * The image is scaled proportionally to the Euclidean distance between the
+   * two anchor points, then rotated to match their orientation angle.
+   *
+   * @param leftPoint   Normalised [0,1] coordinates of the left anchor landmark.
+   * @param rightPoint  Normalised [0,1] coordinates of the right anchor landmark.
+   * @param image       Decal `<img>` element to draw.
+   * @param widthScale  Multiplier applied to the inter-point distance to get the draw width.
+   * @param heightScale Height-to-width ratio of the decal (preserves aspect ratio).
+   * @param yOffset     Optional vertical offset in normalised coordinates (default 0).
+   */
   private drawEffect(
     leftPoint: { x: number; y: number },
     rightPoint: { x: number; y: number },
@@ -220,6 +297,11 @@ export class FaceLandmarksProcessor implements TrackProcessor<Track.Kind> {
     this.outputCanvasCtx!.restore()
   }
 
+  /**
+   * Composite one processed frame: draws the video frame at processing resolution,
+   * then overlays the enabled decals (glasses and/or French set) on every detected
+   * face using the stored `faceLandmarkerResult` landmark coordinates.
+   */
   async drawFaceLandmarks() {
     // Draw the original video frame at the canvas size
     this.outputCanvasCtx!.drawImage(
@@ -282,6 +364,10 @@ export class FaceLandmarksProcessor implements TrackProcessor<Track.Kind> {
     }
   }
 
+  /**
+   * The core processing tick. Extracts the video frame, runs face landmark
+   * detection, draws overlays, and schedules the next tick via the timer worker.
+   */
   async process() {
     await this.sizeSource()
     await this.detectFaces()
@@ -293,6 +379,11 @@ export class FaceLandmarksProcessor implements TrackProcessor<Track.Kind> {
     })
   }
 
+  /**
+   * Find or create the output canvas element for face landmark compositing.
+   * Re-uses an existing DOM canvas with the matching ID to avoid duplicates
+   * across hot-reloads or processor restarts.
+   */
   _createMainCanvas() {
     this.outputCanvas = document.querySelector(
       `#${FACE_LANDMARKS_CANVAS_ID}`
@@ -307,6 +398,14 @@ export class FaceLandmarksProcessor implements TrackProcessor<Track.Kind> {
     this.outputCanvasCtx = this.outputCanvas.getContext('2d')!
   }
 
+  /**
+   * Create a new `<canvas>` element with the given ID and dimensions.
+   *
+   * @param id     HTML `id` attribute to assign.
+   * @param width  Canvas width in pixels.
+   * @param height Canvas height in pixels.
+   * @returns      The created (but not yet attached) canvas element.
+   */
   _createCanvas(id: string, width: number, height: number) {
     const element = document.createElement('canvas')
     element.setAttribute('id', id)
@@ -315,15 +414,30 @@ export class FaceLandmarksProcessor implements TrackProcessor<Track.Kind> {
     return element
   }
 
+  /**
+   * Update which decals are displayed without restarting the processor.
+   * Takes effect on the next processed frame.
+   *
+   * @param opts New decal visibility options.
+   */
   update(opts: FaceLandmarksOptions): void {
     this.options = opts
   }
 
+  /**
+   * Fully restart the processor: destroys the current instance and re-initialises
+   * it with the new track options. Useful when the source track changes.
+   *
+   * @param opts New processor options (track + element).
+   */
   async restart(opts: ProcessorOptions<Track.Kind>) {
     await this.destroy()
     return this.init(opts)
   }
 
+  /**
+   * Stops the timer worker and releases the MediaPipe FaceLandmarker model resources.
+   */
   async destroy() {
     this.timerWorker?.postMessage({
       id: CLEAR_TIMEOUT,

@@ -11,10 +11,27 @@ import { MorphologyOp } from '..'
  * O(N * kernelSize) per pass. Sufficient for 256x256.
  */
 
+/** Binary function that reduces two numbers to one (used for min or max passes). */
 type Reducer = (a: number, b: number) => number
+
+/** Returns the smaller of `a` and `b`. Used for erosion passes. */
 const minReducer: Reducer = (a, b) => (a < b ? a : b)
+/** Returns the larger of `a` and `b`. Used for dilation passes. */
 const maxReducer: Reducer = (a, b) => (a > b ? a : b)
 
+/**
+ * Apply a single 1-D separable min/max pass over a flat Float32 mask image.
+ * Each output pixel is the `reducer` aggregate of the `2*radius+1` window
+ * centered at that pixel (clamped to image boundaries).
+ *
+ * @param src        Source mask (read-only).
+ * @param dst        Destination mask (written in-place).
+ * @param width      Image width in pixels.
+ * @param height     Image height in pixels.
+ * @param radius     Half-width of the sliding window (in pixels).
+ * @param reducer    Aggregation function — `minReducer` for erosion, `maxReducer` for dilation.
+ * @param horizontal If true, sweep rows (horizontal pass); otherwise sweep columns.
+ */
 function pass1D(
   src: Float32Array,
   dst: Float32Array,
@@ -52,6 +69,17 @@ function pass1D(
   }
 }
 
+/**
+ * Apply a full separable 2-D min/max filter by chaining a horizontal then a
+ * vertical `pass1D`. Allocates two temporary buffers per call.
+ *
+ * @param mask     Input mask in [0, 1].
+ * @param width    Mask width in pixels.
+ * @param height   Mask height in pixels.
+ * @param radius   Window half-size in pixels (window = 2*radius+1).
+ * @param reducer  `minReducer` for erosion, `maxReducer` for dilation.
+ * @returns        A new Float32Array with the filtered result.
+ */
 function applyMinOrMax(
   mask: Float32Array,
   width: number,
@@ -66,6 +94,16 @@ function applyMinOrMax(
   return out
 }
 
+/**
+ * Apply a morphological operation to a flat Float32 mask image in [0, 1].
+ *
+ * @param mask       Input mask. Values must be in [0, 1] (1 = person, 0 = background).
+ * @param width      Mask width in pixels.
+ * @param height     Mask height in pixels.
+ * @param op         Operation to perform: 'erosion', 'dilation', 'opening', or 'closing'.
+ * @param kernelSize Square kernel size (3, 5, or 7). Larger = stronger effect.
+ * @returns          A new Float32Array with the morphologically transformed mask.
+ */
 export function applyMorphology(
   mask: Float32Array,
   width: number,

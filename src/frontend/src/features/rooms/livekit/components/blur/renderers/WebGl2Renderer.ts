@@ -121,6 +121,14 @@ export class WebGl2Renderer implements GpuRenderer {
     fgCast:     { uVideo: WebGLUniformLocation | null; uFgMasked: WebGLUniformLocation | null; uBg: WebGLUniformLocation | null; uStrength: WebGLUniformLocation | null }
   }
 
+  /**
+   * Acquire a WebGL2 context on `canvas`, compile all shaders, allocate all
+   * textures and FBOs, and prepare the renderer for the first `render()` call.
+   * Pushes `WEBGL2_INIT_FAILED` and throws if the context or shader build fails.
+   *
+   * @param canvas The output `<canvas>` element — its dimensions are set here.
+   * @param opts   Processing and output dimensions plus initial pipeline config.
+   */
   async init(canvas: HTMLCanvasElement, opts: GpuRendererInitOpts) {
     const gl = canvas.getContext('webgl2', {
       alpha: false,
@@ -174,6 +182,14 @@ export class WebGl2Renderer implements GpuRenderer {
     }
   }
 
+  /**
+   * Reallocate all processing-resolution textures (`rawMaskTex`, ping/pong mask,
+   * EMA) to the new dimensions. Also resets the EMA state to prevent artefacts.
+   * No-op when dimensions are unchanged.
+   *
+   * @param w New processing width (= segmenter model input width).
+   * @param h New processing height (= segmenter model input height).
+   */
   resizeProcessing(w: number, h: number) {
     if (w === this.procW && h === this.procH) return
     this.procW = w
@@ -202,6 +218,16 @@ export class WebGl2Renderer implements GpuRenderer {
     this.hasEmaState = false
   }
 
+  /**
+   * Reallocate all output-resolution resources (video texture, half-res blur
+   * buffers, Segmo pass textures/FBOs, guided filter) to the new dimensions and
+   * update the canvas size. Lazily-allocated Segmo textures are deleted so they
+   * get recreated at the new size on the next virtual-background composite.
+   * No-op when dimensions are unchanged.
+   *
+   * @param w New output width (= camera frame width).
+   * @param h New output height (= camera frame height).
+   */
   resizeOutput(w: number, h: number) {
     if (w === this.outW && h === this.outH) return
     this.outW = w
@@ -280,6 +306,16 @@ export class WebGl2Renderer implements GpuRenderer {
     }
   }
 
+  /**
+   * Upload a new segmentation mask from the segmenter to the GPU.
+   * Converts the Float32 [0, 1] mask to Uint8 and performs a `texSubImage2D`
+   * upload into `rawMaskTex`. Calls `resizeProcessing()` automatically if
+   * the mask dimensions differ from the current processing resolution.
+   *
+   * @param mask Float32Array in [0, 1] (1 = person).
+   * @param w    Mask width in pixels.
+   * @param h    Mask height in pixels.
+   */
   uploadMask(mask: Float32Array, w: number, h: number) {
     if (w !== this.procW || h !== this.procH) {
       this.resizeProcessing(w, h)
@@ -309,6 +345,13 @@ export class WebGl2Renderer implements GpuRenderer {
     )
   }
 
+  /**
+   * Provide a new virtual background image. The image is uploaded to `virtualBgTex`
+   * lazily on the next `render()` call once it has fully loaded.
+   * Pass `null` to clear the virtual background and fall back to the blur path.
+   *
+   * @param img Fully-loaded `<img>` element, or `null` to clear.
+   */
   setVirtualBackground(img: HTMLImageElement | null) {
     if (img === null) {
       this.virtualImgPending = null
@@ -319,19 +362,44 @@ export class WebGl2Renderer implements GpuRenderer {
     this.virtualImgUploaded = false
   }
 
+  /**
+   * Set the Gaussian blur radius (in output pixels) used during the background
+   * blur pass. Only effective when mode is `'blur'`.
+   *
+   * @param px Blur radius in pixels (e.g. 10–30 for typical bokeh effect).
+   */
   setBlurRadius(px: number) {
     this.blurRadius = px
   }
 
+  /**
+   * Switch the compositing mode.
+   * - `'blur'`    : background is a Gaussian-blurred version of the camera frame.
+   * - `'virtual'` : background is replaced by the uploaded virtual image.
+   *
+   * @param mode Target compositing mode.
+   */
   setMode(mode: 'blur' | 'virtual') {
     this.mode = mode
   }
 
+  /**
+   * Update the post-processing configuration and reset EMA state.
+   * The new config takes effect on the next `render()` call.
+   *
+   * @param cfg New post-processing options (sigmoid, closing, EMA).
+   */
   setPostProcessing(cfg: PostProcessingConfig) {
     this.postCfg = cfg
     this.hasEmaState = false
   }
 
+  /**
+   * Update mask upsampling method and parameters.
+   * Destroys the guided filter GPU resources if switching away from guided mode.
+   *
+   * @param cfg New upsampling configuration.
+   */
   setUpsampling(cfg: UpsamplingConfig) {
     this.upsamplingCfg = cfg
     if (cfg.method !== 'guided') {
@@ -340,6 +408,21 @@ export class WebGl2Renderer implements GpuRenderer {
     }
   }
 
+  /**
+   * Composite one output frame to the canvas using the most recently uploaded mask.
+   *
+   * Pipeline steps:
+   *   1. Upload `source` (video or bitmap) into `videoTex`.
+   *   2. Run the post-processing chain on the mask (sigmoid → closing → EMA).
+   *   3. Upsample the refined mask to output resolution (bilinear or guided filter).
+   *   4. Build the background layer (masked gaussian blur or virtual image).
+   *   5. Composite foreground + background using the upsampled mask.
+   *      The Segmo-style path runs automatically when `mode === 'virtual'` and a
+   *      virtual background image has been successfully uploaded.
+   *
+   * @param source Live `<video>` element or a pre-captured `ImageBitmap` for
+   *               frame-locked compositing.
+   */
   render(source: RenderSource) {
     if (!source) return
     const isVideo = (source as HTMLVideoElement).videoWidth !== undefined
@@ -427,6 +510,16 @@ export class WebGl2Renderer implements GpuRenderer {
     gl.flush()
   }
 
+  /**
+   * Synchronously read a rectangular region from the output canvas (default FBO).
+   * Intended for preflight diagnostics; should not be called every frame.
+   *
+   * @param x  Left pixel coordinate of the region.
+   * @param y  Bottom pixel coordinate (WebGL bottom-up convention).
+   * @param w  Width of the region in pixels.
+   * @param h  Height of the region in pixels.
+   * @returns  RGBA8 pixel data, length = w * h * 4.
+   */
   readPixels(x: number, y: number, w: number, h: number): Uint8Array {
     const out = new Uint8Array(w * h * 4)
     const gl = this.gl
@@ -435,6 +528,17 @@ export class WebGl2Renderer implements GpuRenderer {
     return out
   }
 
+  /**
+   * Upsample the processing-resolution mask texture to output resolution.
+   *
+   * - Bilinear (default): returns `procMaskTex` as-is; WebGL LINEAR filtering
+   *   performs the upsampling implicitly during compositing.
+   * - Guided filter: runs `GpuGuidedFilter.run()` using the full-res video as
+   *   guide. Falls back to bilinear and logs a warning if the filter fails.
+   *
+   * @param procMaskTex R8 mask texture at processing resolution.
+   * @returns           Upsampled mask texture (may be the same object for bilinear).
+   */
   private _upsampleMask(procMaskTex: WebGLTexture): WebGLTexture {
     if (this.upsamplingCfg.method !== 'guided') {
       return procMaskTex
@@ -457,6 +561,11 @@ export class WebGl2Renderer implements GpuRenderer {
     return this.gf.run(this.videoTex, procMaskTex, radius, eps, this.vao)
   }
 
+  /**
+   * Release all WebGL resources (textures, FBOs, programs, VAO, buffer) and
+   * destroy the guided filter if one is active.
+   * The renderer must not be used after this call.
+   */
   destroy() {
     if (!this.gl) return
     this.gf?.destroy()
@@ -513,6 +622,18 @@ export class WebGl2Renderer implements GpuRenderer {
 
   // ─────────────────────────────── internals ───────────────────────────────
 
+  /**
+   * Run the GPU post-processing chain on `rawMaskTex` at processing resolution.
+   * Passes the result through the following optional stages in order:
+   *   1. Sigmoid sharpening
+   *   2. Morphological closing (fill holes)
+   *   3. Temporal EMA smoothing
+   *
+   * Uses a ping-pong scheme between `maskA` and `maskB` to avoid read/write
+   * hazards on the same texture. Returns the texture containing the final mask.
+   *
+   * @returns R8 mask texture at processing resolution (either `maskA` or `maskB`).
+   */
   private _runPostProcessing(): WebGLTexture {
     const gl = this.gl
     gl.viewport(0, 0, this.procW, this.procH)
@@ -584,6 +705,15 @@ export class WebGl2Renderer implements GpuRenderer {
     return src
   }
 
+  /**
+   * Run one morphological pass (dilation or erosion) via the `pMorphology` shader.
+   * The shader uses a diamond kernel at processing resolution.
+   *
+   * @param fbo    Destination FBO to render into.
+   * @param src    Source R8 mask texture.
+   * @param radius Positive = dilation (expand), negative = erosion (shrink).
+   *               Magnitude is the pixel radius; capped to 8 inside the shader.
+   */
   private _applyMorphology(fbo: WebGLFramebuffer, src: WebGLTexture, radius: number) {
     const gl = this.gl
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo)
@@ -596,6 +726,21 @@ export class WebGl2Renderer implements GpuRenderer {
     this._drawQuad()
   }
 
+  /**
+   * Build the background layer texture to be used in the final composite.
+   *
+   * - Virtual mode: uploads the virtual background image lazily (first time the
+   *   image is fully loaded) and returns `virtualBgTex`. Falls back to the blur
+   *   path if the image is not yet ready.
+   * - Blur mode: runs a 3-stage masked Gaussian blur at half resolution:
+   *     1. Masked downsample (weighted 3×3 average, background-only).
+   *     2. Horizontal mask-weighted Gaussian.
+   *     3. Vertical mask-weighted Gaussian.
+   *   Returns `bgBlurPongTex`.
+   *
+   * @param maskTex Upsampled mask texture (output resolution) used to weight the blur.
+   * @returns       The background texture ready for compositing.
+   */
   private _buildBackground(maskTex: WebGLTexture): WebGLTexture {
     const gl = this.gl
 
@@ -709,6 +854,11 @@ export class WebGl2Renderer implements GpuRenderer {
    * is unaffected.
    */
   private _segmoLogged = false
+  /**
+   * Lazily allocate the R8 texture and FBO used for the edge-feather pass.
+   * Creates them at the current output resolution. No-op if already allocated.
+   * Throws if the FBO is not framebuffer-complete.
+   */
   private _ensureSegmoFeatherTarget() {
     if (this.segmoFeatheredMaskTex && this.fboSegmoFeatheredMask) return
     const gl = this.gl
@@ -735,6 +885,11 @@ export class WebGl2Renderer implements GpuRenderer {
     this.fboSegmoFeatheredMask = f
   }
 
+  /**
+   * Lazily allocate the RGBA8 texture and FBO used to store the intermediate
+   * Segmo composite output (consumed by the light-wrap pass).
+   * No-op if already allocated. Throws if the FBO is not framebuffer-complete.
+   */
   private _ensureSegmoCompositeTarget() {
     if (this.segmoCompositeTex && this.fboSegmoComposite) return
     const gl = this.gl
@@ -761,6 +916,14 @@ export class WebGl2Renderer implements GpuRenderer {
     this.fboSegmoComposite = f
   }
 
+  /**
+   * Lazily allocate the textures and FBOs for the foreground color-cast passes:
+   *  - `maskedFgTex` / `fboMaskedFg`     — mipmapped RGBA8, stores video × weight.
+   *    Generating mipmaps on this target allows `textureLod(32)` to sample the
+   *    weighted foreground mean color without any CPU readback.
+   *  - `tintedVideoTex` / `fboTintedVideo` — plain RGBA8, output of the cast shader.
+   * No-op if both targets are already allocated. Throws if any FBO is incomplete.
+   */
   private _ensureSegmoTintTargets() {
     if (this.maskedFgTex && this.fboMaskedFg && this.tintedVideoTex && this.fboTintedVideo) return
     const gl = this.gl
@@ -934,12 +1097,21 @@ export class WebGl2Renderer implements GpuRenderer {
     this._drawQuad()
   }
 
+  /**
+   * Draw the full-screen triangle VAO. Must be called after binding the desired
+   * FBO and program. Each `render()` step calls this once per shader pass.
+   */
   private _drawQuad() {
     const gl = this.gl
     gl.bindVertexArray(this.vao)
     gl.drawArrays(gl.TRIANGLES, 0, 3)
   }
 
+  /**
+   * Create the full-screen triangle VAO and upload its vertex data.
+   * Three vertices at [(-1,-1), (3,-1), (-1,3)] cover the entire clip space.
+   * The vertex shader derives UV from `aPos`: `uv = aPos * 0.5 + 0.5`.
+   */
   private _buildQuad() {
     const gl = this.gl
     this.vao = gl.createVertexArray()!
@@ -956,6 +1128,19 @@ export class WebGl2Renderer implements GpuRenderer {
     gl.bindVertexArray(null)
   }
 
+  /**
+   * Allocate all persistent WebGL textures and framebuffer objects needed for
+   * the rendering pipeline. Called once during `init()`.
+   *
+   * Textures created:
+   *  - `videoTex`         — RGBA8 at output resolution, updated each frame.
+   *  - `rawMaskTex`       — R8 at processing resolution, uploaded from segmenter.
+   *  - `maskA` / `maskB`  — R8 ping-pong buffers for post-processing chain.
+   *  - `emaTex`           — R8 persistent EMA accumulator.
+   *  - `bgDownTex`        — RGBA8 at half resolution, masked downsample of video.
+   *  - `bgBlurPingTex`    — RGBA8 at half resolution, after H-pass Gaussian.
+   *  - `bgBlurPongTex`    — RGBA8 at half resolution, after V-pass Gaussian.
+   */
   private _buildTexturesAndFBOs() {
     const gl = this.gl
 
@@ -1044,6 +1229,13 @@ export class WebGl2Renderer implements GpuRenderer {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null)
   }
 
+  /**
+   * Compile a single GLSL shader stage. Throws with the driver info log on failure.
+   *
+   * @param stage `gl.VERTEX_SHADER` or `gl.FRAGMENT_SHADER`.
+   * @param src   GLSL source code string.
+   * @returns     The compiled `WebGLShader`.
+   */
   private _compile(stage: number, src: string): WebGLShader {
     const gl = this.gl
     const sh = gl.createShader(stage)!
@@ -1057,6 +1249,15 @@ export class WebGl2Renderer implements GpuRenderer {
     return sh
   }
 
+  /**
+   * Link a vertex + fragment shader pair into a `WebGLProgram`.
+   * Both shaders are deleted after linking regardless of outcome.
+   * Throws with the driver info log on link failure.
+   *
+   * @param vsSrc Vertex shader GLSL source.
+   * @param fsSrc Fragment shader GLSL source.
+   * @returns     The linked `WebGLProgram`.
+   */
   private _link(vsSrc: string, fsSrc: string): WebGLProgram {
     const gl = this.gl
     const vs = this._compile(gl.VERTEX_SHADER, vsSrc)
@@ -1076,6 +1277,24 @@ export class WebGl2Renderer implements GpuRenderer {
     return p
   }
 
+  /**
+   * Compile, link, and cache all GLSL programs used by the renderer.
+   * Also resolves and stores all uniform locations to avoid per-frame
+   * string-lookup calls through the GL driver.
+   *
+   * Programs created:
+   *  - `pUploadMask` / `pCopyR`      — copy R channel (texture blit).
+   *  - `pSigmoid`                    — pixel-wise sigmoid sharpening.
+   *  - `pEma`                        — temporal EMA on mask.
+   *  - `pMorphology`                 — GPU diamond-kernel dilation/erosion.
+   *  - `pMaskedDownsample`           — weighted 3×3 background downsample.
+   *  - `pMaskWeightedBlur`           — separable mask-weighted Gaussian blur.
+   *  - `pComposite`                  — standard foreground/background blend.
+   *  - `pCompositeSegmo`             — Segmo-style virtual-background compositor.
+   *  - `pSegmoEdgeFeather`           — edge-only 5×5 Gaussian feather.
+   *  - `pLightWrap`                  — background color spill onto edge pixels.
+   *  - `pMaskedFg` / `pFgColorCast`  — foreground color-cast via mip means.
+   */
   private _buildPrograms() {
     const VS = `#version 300 es
 in vec2 aPos;
