@@ -12,9 +12,25 @@ import {
  * where 1 = person, 0 = background.
  */
 export interface Segmenter {
+  /**
+   * Initializes the segmenter (downloads model files, configures delegates).
+   */
   init(): Promise<void>
+
+  /**
+   * Performs segmentation on the provided ImageData frame.
+   * @param imageData RGBA frame data to segment.
+   * @param timestampMs Timestamp of the current frame in milliseconds.
+   * @returns A promise that resolves to a Float32Array mask of size inputSize.width * inputSize.height.
+   */
   segment(imageData: ImageData, timestampMs: number): Promise<Float32Array>
+
+  /**
+   * Closes the segmenter and releases all GPU/CPU resources.
+   */
   destroy(): void
+
+  /** Expected input dimensions of the segmentation model. */
   readonly inputSize: { width: number; height: number }
 }
 
@@ -24,7 +40,10 @@ const MEDIAPIPE_WASM_URL =
 let _filesetPromise: Promise<FilesetResolver> | null =
   null
 
-/** Cache the FilesetResolver across segmenter instances — it loads ~1MB of WASM. */
+/**
+ * Cache the FilesetResolver across segmenter instances — it loads ~1MB of WASM.
+ * Avoids redundant network requests and speeds up successive initializations.
+ */
 export function getMediapipeFileset(): Promise<FilesetResolver> {
   if (!_filesetPromise) {
     _filesetPromise = FilesetResolver.forVisionTasks(MEDIAPIPE_WASM_URL).catch(
@@ -46,6 +65,8 @@ let _delegateProbe: Promise<'GPU' | 'CPU'> | null = null
  * Replaces the previous UA-sniff that blanket-disabled GPU on Safari — Safari ≥ 17
  * supports the GPU delegate, and the user-facing impact of forcing CPU is severe
  * (80–150 ms per frame at 256² → queue saturation → frames look like passthrough).
+ *
+ * @returns A promise resolving to either 'GPU' or 'CPU'.
  */
 export function probeMediapipeDelegate(): Promise<'GPU' | 'CPU'> {
   if (_delegateProbe) return _delegateProbe

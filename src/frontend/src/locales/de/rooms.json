@@ -254,6 +254,52 @@
     "notAvailable": "Videoeffekte werden bald in deinem Browser verfügbar sein. Wir arbeiten daran! In der Zwischenzeit kannst du Google Chrome für die beste Leistung oder Firefox verwenden :(",
     "heading": "Unschärfe",
     "clear": "Effekt deaktivieren",
+<<<<<<< HEAD
+=======
+    "advanced": {
+      "title": "Erweiterte Einstellungen",
+      "model": {
+        "title": "Segmentierungsmodell",
+        "auto": "Optimiert (automatisch)",
+        "landscape": "Landscape (schnell)",
+        "multiclass": "Multiclass (Qualität)",
+        "rvm": "RVM (rekurrent, höhere Qualität)"
+      },
+      "rvmDownsample": {
+        "manual": "Manuelles Downsample-Verhältnis",
+        "label": "Downsample-Verhältnis (RVM)"
+      },
+      "sync": {
+        "title": "Maske/Bild-Synchronisation"
+      },
+      "preProcessing": {
+        "title": "Vorverarbeitung",
+        "roiCropping": "Personenausschnitt (ROI)"
+      },
+      "postProcessing": {
+        "title": "Nachbearbeitung",
+        "sigmoid": "Sigmoid",
+        "erosion": "Kantenerosion",
+        "ema": "EMA"
+      },
+      "upsampling": {
+        "title": "Hochskalierung",
+        "guidedFilter": "Guided Filter (GPU)"
+      },
+      "params": {
+        "sigmoidSteepness": "Sigmoid-Steilheit",
+        "sigmoidThreshold": "Sigmoid-Schwelle",
+        "erosionPixels": "Entfernte Pixel (Kanten)",
+        "emaAlpha": "Reaktivität (EMA)",
+        "blurRadius": "Unschärfe-Intensität",
+        "upsamplingRadius": "Radius (Guided Filter)",
+        "upsamplingEps": "Regularisierung (Guided Filter)",
+        "maxFrameOffset": "Max. Maske/Bild-Versatz (Frames)",
+        "maxFrameOffsetStrict": "gesperrt"
+      },
+      "apply": "Anwenden"
+    },
+>>>>>>> arthur_main
     "blur": {
       "title": "Hintergrundunschärfe",
       "status": {

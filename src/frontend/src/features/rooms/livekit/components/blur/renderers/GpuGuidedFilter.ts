@@ -230,18 +230,24 @@ export class GpuGuidedFilter {
   private pSolve!: WebGLProgram
   private pApply!: WebGLProgram
 
-  // Cached uniform locations — populated once during _build() to avoid
-  // synchronous gl.getUniformLocation string lookups in the hot render path.
-  private uLocs!: {
-    hStats1: { uVideo: WebGLUniformLocation; uMask: WebGLUniformLocation; uTexelX: WebGLUniformLocation; uRadius: WebGLUniformLocation }
-    hStats2: { uVideo: WebGLUniformLocation; uTexelX: WebGLUniformLocation; uRadius: WebGLUniformLocation }
-    hStats3: { uVideo: WebGLUniformLocation; uMask: WebGLUniformLocation; uTexelX: WebGLUniformLocation; uRadius: WebGLUniformLocation }
-    hStats4: { uVideo: WebGLUniformLocation; uMask: WebGLUniformLocation; uTexelX: WebGLUniformLocation; uRadius: WebGLUniformLocation }
-    box: { uTex: WebGLUniformLocation; uDir: WebGLUniformLocation; uRadius: WebGLUniformLocation }
-    solve: { uStats1: WebGLUniformLocation; uStats2: WebGLUniformLocation; uStats3: WebGLUniformLocation; uStats4: WebGLUniformLocation; uEps: WebGLUniformLocation }
-    apply: { uVideo: WebGLUniformLocation; uCoeffMean: WebGLUniformLocation }
-  }
+  // Cached uniform locations — resolved once in _build(), reused every frame.
+  private uHStats1!: { uVideo: WebGLUniformLocation | null; uMask: WebGLUniformLocation | null; uTexelX: WebGLUniformLocation | null; uRadius: WebGLUniformLocation | null }
+  private uHStats2!: { uVideo: WebGLUniformLocation | null; uTexelX: WebGLUniformLocation | null; uRadius: WebGLUniformLocation | null }
+  private uHStats3!: { uVideo: WebGLUniformLocation | null; uMask: WebGLUniformLocation | null; uTexelX: WebGLUniformLocation | null; uRadius: WebGLUniformLocation | null }
+  private uHStats4!: { uVideo: WebGLUniformLocation | null; uMask: WebGLUniformLocation | null; uTexelX: WebGLUniformLocation | null; uRadius: WebGLUniformLocation | null }
+  private uBox!: { uTex: WebGLUniformLocation | null; uDir: WebGLUniformLocation | null; uRadius: WebGLUniformLocation | null }
+  private uSolve!: { uStats1: WebGLUniformLocation | null; uStats2: WebGLUniformLocation | null; uStats3: WebGLUniformLocation | null; uStats4: WebGLUniformLocation | null; uEps: WebGLUniformLocation | null }
+  private uApply!: { uVideo: WebGLUniformLocation | null; uCoeffMean: WebGLUniformLocation | null }
 
+  /**
+   * Create a GpuGuidedFilter for the given WebGL2 context and output dimensions.
+   * Allocates all intermediate RGBA32F textures and FBOs, compiles and links
+   * all GLSL programs. Throws if `EXT_color_buffer_float` is unavailable.
+   *
+   * @param gl    An active WebGL2 rendering context.
+   * @param outW  Output width in pixels (same as guide image width).
+   * @param outH  Output height in pixels (same as guide image height).
+   */
   constructor(gl: WebGL2RenderingContext, outW: number, outH: number) {
     this.gl = gl
     this.outW = outW
@@ -287,35 +293,35 @@ export class GpuGuidedFilter {
     gl.useProgram(this.pHStats1)
     bindTex(0, videoTex)
     bindTex(1, maskTex)
-    gl.uniform1i(this.uLocs.hStats1.uVideo,  0)
-    gl.uniform1i(this.uLocs.hStats1.uMask,   1)
-    gl.uniform1f(this.uLocs.hStats1.uTexelX, texelX)
-    gl.uniform1i(this.uLocs.hStats1.uRadius, r)
+    gl.uniform1i(this.uHStats1.uVideo, 0)
+    gl.uniform1i(this.uHStats1.uMask, 1)
+    gl.uniform1f(this.uHStats1.uTexelX, texelX)
+    gl.uniform1i(this.uHStats1.uRadius, r)
     draw()
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboStats1)
     gl.useProgram(this.pBox)
     bindTex(0, this.gfH)
-    gl.uniform1i(this.uLocs.box.uTex,    0)
-    gl.uniform2f(this.uLocs.box.uDir,    0, texelY)
-    gl.uniform1i(this.uLocs.box.uRadius, r)
+    gl.uniform1i(this.uBox.uTex, 0)
+    gl.uniform2f(this.uBox.uDir, 0, texelY)
+    gl.uniform1i(this.uBox.uRadius, r)
     draw()
 
     // ── stats2: box(R², RG, RB, G²) ─────────────────────────────────────────
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboH)
     gl.useProgram(this.pHStats2)
     bindTex(0, videoTex)
-    gl.uniform1i(this.uLocs.hStats2.uVideo,  0)
-    gl.uniform1f(this.uLocs.hStats2.uTexelX, texelX)
-    gl.uniform1i(this.uLocs.hStats2.uRadius, r)
+    gl.uniform1i(this.uHStats2.uVideo, 0)
+    gl.uniform1f(this.uHStats2.uTexelX, texelX)
+    gl.uniform1i(this.uHStats2.uRadius, r)
     draw()
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboStats2)
     gl.useProgram(this.pBox)
     bindTex(0, this.gfH)
-    gl.uniform1i(this.uLocs.box.uTex,    0)
-    gl.uniform2f(this.uLocs.box.uDir,    0, texelY)
-    gl.uniform1i(this.uLocs.box.uRadius, r)
+    gl.uniform1i(this.uBox.uTex, 0)
+    gl.uniform2f(this.uBox.uDir, 0, texelY)
+    gl.uniform1i(this.uBox.uRadius, r)
     draw()
 
     // ── stats3: box(GB, B², Rp, Gp) ─────────────────────────────────────────
@@ -323,18 +329,18 @@ export class GpuGuidedFilter {
     gl.useProgram(this.pHStats3)
     bindTex(0, videoTex)
     bindTex(1, maskTex)
-    gl.uniform1i(this.uLocs.hStats3.uVideo,  0)
-    gl.uniform1i(this.uLocs.hStats3.uMask,   1)
-    gl.uniform1f(this.uLocs.hStats3.uTexelX, texelX)
-    gl.uniform1i(this.uLocs.hStats3.uRadius, r)
+    gl.uniform1i(this.uHStats3.uVideo, 0)
+    gl.uniform1i(this.uHStats3.uMask, 1)
+    gl.uniform1f(this.uHStats3.uTexelX, texelX)
+    gl.uniform1i(this.uHStats3.uRadius, r)
     draw()
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboStats3)
     gl.useProgram(this.pBox)
     bindTex(0, this.gfH)
-    gl.uniform1i(this.uLocs.box.uTex,    0)
-    gl.uniform2f(this.uLocs.box.uDir,    0, texelY)
-    gl.uniform1i(this.uLocs.box.uRadius, r)
+    gl.uniform1i(this.uBox.uTex, 0)
+    gl.uniform2f(this.uBox.uDir, 0, texelY)
+    gl.uniform1i(this.uBox.uRadius, r)
     draw()
 
     // ── stats4: box(Bp) ──────────────────────────────────────────────────────
@@ -342,18 +348,18 @@ export class GpuGuidedFilter {
     gl.useProgram(this.pHStats4)
     bindTex(0, videoTex)
     bindTex(1, maskTex)
-    gl.uniform1i(this.uLocs.hStats4.uVideo,  0)
-    gl.uniform1i(this.uLocs.hStats4.uMask,   1)
-    gl.uniform1f(this.uLocs.hStats4.uTexelX, texelX)
-    gl.uniform1i(this.uLocs.hStats4.uRadius, r)
+    gl.uniform1i(this.uHStats4.uVideo, 0)
+    gl.uniform1i(this.uHStats4.uMask, 1)
+    gl.uniform1f(this.uHStats4.uTexelX, texelX)
+    gl.uniform1i(this.uHStats4.uRadius, r)
     draw()
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboStats4)
     gl.useProgram(this.pBox)
     bindTex(0, this.gfH)
-    gl.uniform1i(this.uLocs.box.uTex,    0)
-    gl.uniform2f(this.uLocs.box.uDir,    0, texelY)
-    gl.uniform1i(this.uLocs.box.uRadius, r)
+    gl.uniform1i(this.uBox.uTex, 0)
+    gl.uniform2f(this.uBox.uDir, 0, texelY)
+    gl.uniform1i(this.uBox.uRadius, r)
     draw()
 
     // ── solve a, b ───────────────────────────────────────────────────────────
@@ -363,28 +369,28 @@ export class GpuGuidedFilter {
     bindTex(1, this.gfStats2)
     bindTex(2, this.gfStats3)
     bindTex(3, this.gfStats4)
-    gl.uniform1i(this.uLocs.solve.uStats1, 0)
-    gl.uniform1i(this.uLocs.solve.uStats2, 1)
-    gl.uniform1i(this.uLocs.solve.uStats3, 2)
-    gl.uniform1i(this.uLocs.solve.uStats4, 3)
-    gl.uniform1f(this.uLocs.solve.uEps,    eps)
+    gl.uniform1i(this.uSolve.uStats1, 0)
+    gl.uniform1i(this.uSolve.uStats2, 1)
+    gl.uniform1i(this.uSolve.uStats3, 2)
+    gl.uniform1i(this.uSolve.uStats4, 3)
+    gl.uniform1f(this.uSolve.uEps, eps)
     draw()
 
     // ── box filter a, b ──────────────────────────────────────────────────────
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboH)
     gl.useProgram(this.pBox)
     bindTex(0, this.gfCoeff)
-    gl.uniform1i(this.uLocs.box.uTex,    0)
-    gl.uniform2f(this.uLocs.box.uDir,    texelX, 0)
-    gl.uniform1i(this.uLocs.box.uRadius, r)
+    gl.uniform1i(this.uBox.uTex, 0)
+    gl.uniform2f(this.uBox.uDir, texelX, 0)
+    gl.uniform1i(this.uBox.uRadius, r)
     draw()
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboCoeffMean)
     gl.useProgram(this.pBox)
     bindTex(0, this.gfH)
-    gl.uniform1i(this.uLocs.box.uTex,    0)
-    gl.uniform2f(this.uLocs.box.uDir,    0, texelY)
-    gl.uniform1i(this.uLocs.box.uRadius, r)
+    gl.uniform1i(this.uBox.uTex, 0)
+    gl.uniform2f(this.uBox.uDir, 0, texelY)
+    gl.uniform1i(this.uBox.uRadius, r)
     draw()
 
     // ── apply q = coeffMean · I + b ──────────────────────────────────────────
@@ -392,13 +398,17 @@ export class GpuGuidedFilter {
     gl.useProgram(this.pApply)
     bindTex(0, videoTex)
     bindTex(1, this.gfCoeffMean)
-    gl.uniform1i(this.uLocs.apply.uVideo,     0)
-    gl.uniform1i(this.uLocs.apply.uCoeffMean, 1)
+    gl.uniform1i(this.uApply.uVideo, 0)
+    gl.uniform1i(this.uApply.uCoeffMean, 1)
     draw()
 
     return this.gfOut
   }
 
+  /**
+   * Delete all GPU resources (textures, FBOs, programs) held by this filter.
+   * The instance must not be used after calling this method.
+   */
   destroy() {
     const gl = this.gl
     const textures = [
@@ -420,6 +430,11 @@ export class GpuGuidedFilter {
 
   // ─── internals ────────────────────────────────────────────────────────────
 
+  /**
+   * Allocate all textures, FBOs, and compile all shader programs.
+   * Called once in the constructor. Throws on unsupported extensions or
+   * shader compilation / program linking errors.
+   */
   private _build() {
     const gl = this.gl
 
@@ -453,23 +468,23 @@ export class GpuGuidedFilter {
       return f
     }
 
-    this.gfH         = makeTex()
-    this.gfStats1    = makeTex()
-    this.gfStats2    = makeTex()
-    this.gfStats3    = makeTex()
-    this.gfStats4    = makeTex()
-    this.gfCoeff     = makeTex()
+    this.gfH = makeTex()
+    this.gfStats1 = makeTex()
+    this.gfStats2 = makeTex()
+    this.gfStats3 = makeTex()
+    this.gfStats4 = makeTex()
+    this.gfCoeff = makeTex()
     this.gfCoeffMean = makeTex()
-    this.gfOut       = makeTex()
+    this.gfOut = makeTex()
 
-    this.fboH         = makeFbo(this.gfH)
-    this.fboStats1    = makeFbo(this.gfStats1)
-    this.fboStats2    = makeFbo(this.gfStats2)
-    this.fboStats3    = makeFbo(this.gfStats3)
-    this.fboStats4    = makeFbo(this.gfStats4)
-    this.fboCoeff     = makeFbo(this.gfCoeff)
+    this.fboH = makeFbo(this.gfH)
+    this.fboStats1 = makeFbo(this.gfStats1)
+    this.fboStats2 = makeFbo(this.gfStats2)
+    this.fboStats3 = makeFbo(this.gfStats3)
+    this.fboStats4 = makeFbo(this.gfStats4)
+    this.fboCoeff = makeFbo(this.gfCoeff)
     this.fboCoeffMean = makeFbo(this.gfCoeffMean)
-    this.fboOut       = makeFbo(this.gfOut)
+    this.fboOut = makeFbo(this.gfOut)
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, null)
 
@@ -477,24 +492,61 @@ export class GpuGuidedFilter {
     this.pHStats2 = this._link(VS, FS_H_STATS2)
     this.pHStats3 = this._link(VS, FS_H_STATS3)
     this.pHStats4 = this._link(VS, FS_H_STATS4)
-    this.pBox     = this._link(VS, FS_BOX)
-    this.pSolve   = this._link(VS, FS_SOLVE)
-    this.pApply   = this._link(VS, FS_APPLY)
+    this.pBox = this._link(VS, FS_BOX)
+    this.pSolve = this._link(VS, FS_SOLVE)
+    this.pApply = this._link(VS, FS_APPLY)
 
-    // Cache all uniform locations once — avoids synchronous string lookups
-    // inside the hot per-frame run() method.
-    const u = (p: WebGLProgram, name: string) => gl.getUniformLocation(p, name)!
-    this.uLocs = {
-      hStats1: { uVideo: u(this.pHStats1, 'uVideo'), uMask: u(this.pHStats1, 'uMask'), uTexelX: u(this.pHStats1, 'uTexelX'), uRadius: u(this.pHStats1, 'uRadius') },
-      hStats2: { uVideo: u(this.pHStats2, 'uVideo'), uTexelX: u(this.pHStats2, 'uTexelX'), uRadius: u(this.pHStats2, 'uRadius') },
-      hStats3: { uVideo: u(this.pHStats3, 'uVideo'), uMask: u(this.pHStats3, 'uMask'), uTexelX: u(this.pHStats3, 'uTexelX'), uRadius: u(this.pHStats3, 'uRadius') },
-      hStats4: { uVideo: u(this.pHStats4, 'uVideo'), uMask: u(this.pHStats4, 'uMask'), uTexelX: u(this.pHStats4, 'uTexelX'), uRadius: u(this.pHStats4, 'uRadius') },
-      box: { uTex: u(this.pBox, 'uTex'), uDir: u(this.pBox, 'uDir'), uRadius: u(this.pBox, 'uRadius') },
-      solve: { uStats1: u(this.pSolve, 'uStats1'), uStats2: u(this.pSolve, 'uStats2'), uStats3: u(this.pSolve, 'uStats3'), uStats4: u(this.pSolve, 'uStats4'), uEps: u(this.pSolve, 'uEps') },
-      apply: { uVideo: u(this.pApply, 'uVideo'), uCoeffMean: u(this.pApply, 'uCoeffMean') },
+    // Cache all uniform locations once — avoids per-frame string lookups
+    // through the GL driver which can stall the CPU-GPU pipeline.
+    const loc = (p: WebGLProgram, n: string) => gl.getUniformLocation(p, n)
+    this.uHStats1 = {
+      uVideo: loc(this.pHStats1, 'uVideo'),
+      uMask: loc(this.pHStats1, 'uMask'),
+      uTexelX: loc(this.pHStats1, 'uTexelX'),
+      uRadius: loc(this.pHStats1, 'uRadius'),
+    }
+    this.uHStats2 = {
+      uVideo: loc(this.pHStats2, 'uVideo'),
+      uTexelX: loc(this.pHStats2, 'uTexelX'),
+      uRadius: loc(this.pHStats2, 'uRadius'),
+    }
+    this.uHStats3 = {
+      uVideo: loc(this.pHStats3, 'uVideo'),
+      uMask: loc(this.pHStats3, 'uMask'),
+      uTexelX: loc(this.pHStats3, 'uTexelX'),
+      uRadius: loc(this.pHStats3, 'uRadius'),
+    }
+    this.uHStats4 = {
+      uVideo: loc(this.pHStats4, 'uVideo'),
+      uMask: loc(this.pHStats4, 'uMask'),
+      uTexelX: loc(this.pHStats4, 'uTexelX'),
+      uRadius: loc(this.pHStats4, 'uRadius'),
+    }
+    this.uBox = {
+      uTex: loc(this.pBox, 'uTex'),
+      uDir: loc(this.pBox, 'uDir'),
+      uRadius: loc(this.pBox, 'uRadius'),
+    }
+    this.uSolve = {
+      uStats1: loc(this.pSolve, 'uStats1'),
+      uStats2: loc(this.pSolve, 'uStats2'),
+      uStats3: loc(this.pSolve, 'uStats3'),
+      uStats4: loc(this.pSolve, 'uStats4'),
+      uEps: loc(this.pSolve, 'uEps'),
+    }
+    this.uApply = {
+      uVideo: loc(this.pApply, 'uVideo'),
+      uCoeffMean: loc(this.pApply, 'uCoeffMean'),
     }
   }
 
+  /**
+   * Compile a single GLSL shader stage. Throws with the info log on failure.
+   *
+   * @param stage Either `gl.VERTEX_SHADER` or `gl.FRAGMENT_SHADER`.
+   * @param src   GLSL source code string.
+   * @returns     The compiled `WebGLShader`.
+   */
   private _compile(stage: number, src: string): WebGLShader {
     const gl = this.gl
     const sh = gl.createShader(stage)!
@@ -508,6 +560,14 @@ export class GpuGuidedFilter {
     return sh
   }
 
+  /**
+   * Link a vertex + fragment shader into a `WebGLProgram`. Throws on failure.
+   * The individual shaders are deleted after linking regardless of outcome.
+   *
+   * @param vsSrc Vertex shader GLSL source.
+   * @param fsSrc Fragment shader GLSL source.
+   * @returns     The linked `WebGLProgram`.
+   */
   private _link(vsSrc: string, fsSrc: string): WebGLProgram {
     const gl = this.gl
     const vs = this._compile(gl.VERTEX_SHADER, vsSrc)

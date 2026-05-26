@@ -139,6 +139,37 @@ export const EffectsConfiguration = ({
     userChoices: { processorConfig },
   } = usePersistentUserChoices()
 
+  // ----- Advanced matting settings (model + pre/post-processing toggles) -----
+  // Continuous blur radius slider; only meaningful when a blur effect is selected.
+  const initialBlurRadius =
+    processorConfig?.type === ProcessorType.BLUR
+      ? processorConfig.blurRadius
+      : 10
+  const [blurRadiusValue, setBlurRadiusValue] =
+    useState<number>(initialBlurRadius)
+
+  const buildPreProcessing = useCallback((): PreProcessingConfig => {
+    return {
+      roiCropping: { enabled: true },
+    }
+  }, [])
+
+  const buildPostProcessing = useCallback((): PostProcessingConfig => {
+    return {
+      erosion: { pixels: 3 },
+      ema: { alpha: 0.7 },
+      closing: { radius: 3 },
+    }
+  }, [])
+
+  const buildUpsampling = useCallback((): UpsamplingConfig => {
+    return {
+      method: 'guided',
+      radius: 8,
+      eps: 0.01,
+    }
+  }, [])
+
   const withAdvanced = useCallback(
     (config: ProcessorConfig): ProcessorConfig => {
       if (
@@ -147,15 +178,16 @@ export const EffectsConfiguration = ({
       ) {
         return {
           ...config,
-          model: PRODUCTION_MODEL,
-          preProcessing: PRODUCTION_PRE_PROCESSING,
-          postProcessing: PRODUCTION_POST_PROCESSING,
-          upsampling: PRODUCTION_UPSAMPLING,
+          model: SegmentationModel.AUTO,
+          preProcessing: buildPreProcessing(),
+          postProcessing: buildPostProcessing(),
+          upsampling: buildUpsampling(),
+          maxFrameOffset: 0,
         }
       }
       return config
     },
-    []
+    [buildPreProcessing, buildPostProcessing, buildUpsampling]
   )
 
   const selectedId = useMemo(
@@ -298,6 +330,40 @@ export const EffectsConfiguration = ({
       withAdvanced,
     ]
   )
+
+  // Live blur radius slider: debounced apply that doesn't go through toggleEffect
+  // (which would stop the processor when slider sits on the same value as selected).
+  const blurDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const applyBlurRadius = useCallback(
+    (radius: number) => {
+      setBlurRadiusValue(radius)
+      if (blurDebounceRef.current) clearTimeout(blurDebounceRef.current)
+      blurDebounceRef.current = setTimeout(async () => {
+        const config = withAdvanced({
+          type: ProcessorType.BLUR,
+          blurRadius: radius,
+        })
+        const processor = videoTrack?.getProcessor() as
+          | BackgroundProcessorInterface
+          | undefined
+        if (processor && processor.options.type === ProcessorType.BLUR) {
+          await processor.update(config)
+          saveProcessorConfig(config)
+        } else {
+          toggleEffect(config)
+        }
+      }, 200)
+    },
+    [videoTrack, withAdvanced, saveProcessorConfig, toggleEffect]
+  )
+
+  // Keep the slider in sync when the user picks a preset button (Light/Strong)
+  // or when blur is disabled.
+  useEffect(() => {
+    if (processorConfig?.type === ProcessorType.BLUR) {
+      setBlurRadiusValue(processorConfig.blurRadius)
+    }
+  }, [processorConfig])
 
   const { data: appConfig } = useConfig()
   const { isLoggedIn } = useUser()
@@ -570,19 +636,19 @@ export const EffectsConfiguration = ({
       className={css(
         layout === 'vertical'
           ? {
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '1.5rem',
-            }
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '1.5rem',
+          }
           : {
-              display: 'flex',
-              gap: '1.5rem',
-              flexDirection: 'column',
-              md: {
-                flexDirection: 'row',
-                overflow: 'hidden',
-              },
-            }
+            display: 'flex',
+            gap: '1.5rem',
+            flexDirection: 'column',
+            md: {
+              flexDirection: 'row',
+              overflow: 'hidden',
+            },
+          }
       )}
     >
       <div
@@ -644,13 +710,13 @@ export const EffectsConfiguration = ({
         className={css(
           layout === 'horizontal'
             ? {
-                md: {
-                  borderLeft: '1px solid greyscale.250',
-                  paddingLeft: '1.5rem',
-                  width: '420px',
-                  flexShrink: 0,
-                },
-              }
+              md: {
+                borderLeft: '1px solid greyscale.250',
+                paddingLeft: '1.5rem',
+                width: '420px',
+                flexShrink: 0,
+              },
+            }
             : {}
         )}
       >
@@ -883,8 +949,8 @@ export const EffectsConfiguration = ({
                         (canUploadBackground &&
                           filesQ.data &&
                           filesQ.data.count >=
-                            (appConfig?.background_image?.max_count_by_user ??
-                              0)) ||
+                          (appConfig?.background_image?.max_count_by_user ??
+                            0)) ||
                         processorOptions.isDisabled ||
                         createFileMutation.isPending
                       }

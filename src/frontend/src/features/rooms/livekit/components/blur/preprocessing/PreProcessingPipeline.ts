@@ -28,8 +28,12 @@ export class PreProcessingPipeline {
    * video frame. Must be called before sizeSource() each frame.
    * Returns null when no spatial crop is needed (full frame).
    */
-  getNextCropBbox(): BBox | null {
-    return this.roiCropper?.getNextCropBbox() ?? null
+  getNextCropBbox(
+    currentRgba?: Uint8ClampedArray,
+    rgbaW?: number,
+    rgbaH?: number
+  ): BBox | null {
+    return this.roiCropper?.getNextCropBbox(currentRgba, rgbaW, rgbaH) ?? null
   }
 
   /**
@@ -69,6 +73,10 @@ export class PreProcessingPipeline {
     return full
   }
 
+  /**
+   * Reset all stateful pre-processors (e.g. RoiCropper bbox history).
+   * Should be called when the segmenter model or processing resolution changes.
+   */
   reset(): void {
     this.roiCropper?.reset()
   }

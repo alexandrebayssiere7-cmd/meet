@@ -1,9 +1,27 @@
+/** Minimum normalised centre displacement to trigger EMA update (dead-zone). */
 const DEAD_ZONE_POSITION = 0.03
+/** Minimum normalised size delta to trigger EMA update (dead-zone). */
 const DEAD_ZONE_SIZE = 0.015
+/** EMA smoothing factor for bbox position/size updates (0=frozen, 1=instant). */
 const SMOOTHING = 0.5
+/** Extra normalised margin added around the detected person bbox. */
 const BBOX_PADDING = 0.05
+/** Mask confidence threshold above which a pixel is considered "person". */
 const MASK_THRESHOLD = 0.5
+/** Per-pixel luma delta (0–255) that counts as a changed pixel during motion check. */
+const MOTION_DIFF_THRESHOLD = 25
+/** Fraction of pixels outside the bbox that must change to trigger full-frame expansion. */
+const MOTION_PIXEL_RATIO = 1 / 16
+/** How often (in frames) the motion check is run. */
+const MOTION_CHECK_INTERVAL = 30
+/** Number of frames to hold the full-frame bbox after a motion-triggered expansion. */
+const EXPANSION_COOLDOWN_FRAMES = 30
 
+/**
+ * Axis-aligned bounding box expressed as normalised coordinates in [0, 1].
+ * `x` and `y` are the top-left corner; all values are relative to the
+ * full image dimensions so the bbox is resolution-independent.
+ */
 export interface BBox {
   x: number      // normalised left edge [0, 1]
   y: number      // normalised top edge  [0, 1]
@@ -11,8 +29,15 @@ export interface BBox {
   height: number // normalised height    [0, 1]
 }
 
+/** Sentinel bbox representing the entire frame — used before the first mask is available. */
 const FULL_FRAME: BBox = { x: 0, y: 0, width: 1, height: 1 }
 
+/**
+ * Clamp a value to the range [lo, hi].
+ * @param v   Value to clamp.
+ * @param lo  Lower bound (inclusive).
+ * @param hi  Upper bound (inclusive).
+ */
 function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v
 }
@@ -78,16 +103,15 @@ export function stabilizeBbox(current: BBox, next: BBox): BBox {
   }
 }
 
-/*
-** Bilinear resize of a Float32 single-channel image. *
-function resizeFloat32(
+/** Bilinear resize of a Float32 single-channel image into a pre-allocated destination. */
+function resizeFloat32Into(
   src: Float32Array,
   srcW: number,
   srcH: number,
+  dst: Float32Array,
   dstW: number,
   dstH: number
-): Float32Array {
-  const dst = new Float32Array(dstW * dstH)
+): void {
   const scaleX = srcW / dstW
   const scaleY = srcH / dstH
 
@@ -112,7 +136,6 @@ function resizeFloat32(
       dst[dy * dstW + dx] = v
     }
   }
-  return dst
 }
 */
 
@@ -132,6 +155,12 @@ export class RoiCropper {
   private currentBbox: BBox = { ...FULL_FRAME }
   private hasMask = false
   private frameCounter = 0
+  private prevLuma: Uint8Array | null = null
+  private cooldownFrames = 0
+
+  // Reusable buffers — avoids per-frame Float32Array allocations in remapMask/resizeFloat32.
+  private _resizeBuf: Float32Array | null = null
+  private _fullBuf: Float32Array | null = null
 
   // Pre-allocated ring-buffer for remapMask output. Sized for the maximum
   // processing resolution the pipeline supports (256×256). The caller receives
@@ -151,12 +180,93 @@ export class RoiCropper {
   }
 
   /** Returns the stabilised bbox to use when extracting the model input for this frame. */
-  getNextCropBbox(): BBox {
+  getNextCropBbox(
+    currentRgba?: Uint8ClampedArray,
+    rgbaW?: number,
+    rgbaH?: number
+  ): BBox {
     this.frameCounter++
-    if (this.frameCounter % 45 === 0) {
-      return { ...FULL_FRAME }
+
+    if (this.cooldownFrames > 0) {
+      this.cooldownFrames--
+      return { ...this.currentBbox }
     }
-    return this.currentBbox
+
+    if (this.frameCounter % MOTION_CHECK_INTERVAL === 0) {
+      const motionDetected =
+        !!currentRgba && !!rgbaW && !!rgbaH && !!this.prevLuma &&
+        this._hasMotionOutsideBbox(currentRgba, rgbaW, rgbaH, this.currentBbox)
+      this._updatePrevLuma(currentRgba, rgbaW, rgbaH)
+      if (motionDetected) {
+        this.currentBbox = { ...FULL_FRAME }
+        this.cooldownFrames = EXPANSION_COOLDOWN_FRAMES
+        return { ...FULL_FRAME }
+      }
+    }
+
+    return { ...this.currentBbox }
+  }
+
+  /**
+   * Detect whether a significant number of pixels *outside* the current bbox
+   * have changed luma value compared to the previous frame.
+   * Uses a low-resolution (~128×72) frame for performance.
+   *
+   * @param rgba  RGBA pixel data of the current downsampled frame.
+   * @param w     Frame width in pixels.
+   * @param h     Frame height in pixels.
+   * @param bbox  Normalised bbox of the person — pixels inside are ignored.
+   * @returns     True if `MOTION_PIXEL_RATIO` fraction of outside pixels changed.
+   */
+  private _hasMotionOutsideBbox(
+    rgba: Uint8ClampedArray,
+    w: number,
+    h: number,
+    bbox: BBox
+  ): boolean {
+    const bboxX0 = Math.floor(bbox.x * w)
+    const bboxY0 = Math.floor(bbox.y * h)
+    const bboxX1 = Math.ceil((bbox.x + bbox.width) * w)
+    const bboxY1 = Math.ceil((bbox.y + bbox.height) * h)
+    const prev = this.prevLuma!
+    let changedPixels = 0
+
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (x >= bboxX0 && x < bboxX1 && y >= bboxY0 && y < bboxY1) continue
+        const i = (y * w + x) * 4
+        const luma = (rgba[i] + rgba[i + 1] + rgba[i + 2]) / 3
+        if (Math.abs(luma - prev[y * w + x]) > MOTION_DIFF_THRESHOLD) {
+          changedPixels++
+        }
+      }
+    }
+
+    return changedPixels / (w * h) > MOTION_PIXEL_RATIO
+  }
+
+  /**
+   * Store the current frame's per-pixel luma (average of R, G, B) for use in
+   * the next motion check. Allocates or reuses an internal `Uint8Array`.
+   *
+   * @param rgba RGBA pixel data of the current downsampled frame.
+   * @param w    Frame width in pixels.
+   * @param h    Frame height in pixels.
+   */
+  private _updatePrevLuma(
+    rgba?: Uint8ClampedArray,
+    w?: number,
+    h?: number
+  ): void {
+    if (!rgba || !w || !h) return
+    const n = w * h
+    if (!this.prevLuma || this.prevLuma.length !== n) {
+      this.prevLuma = new Uint8Array(n)
+    }
+    for (let i = 0; i < n; i++) {
+      const j = i * 4
+      this.prevLuma[i] = (rgba[j] + rgba[j + 1] + rgba[j + 2]) / 3
+    }
   }
 
   /**
@@ -175,21 +285,11 @@ export class RoiCropper {
     fullW: number,
     fullH: number
   ): Float32Array {
-    // Ensure buffers are large enough (reallocate only on resolution change).
-    if (fullW * fullH > this.fullBufW * this.fullBufH) {
-      this.fullMaskBuffers = [
-        new Float32Array(fullW * fullH),
-        new Float32Array(fullW * fullH),
-      ]
-      this.fullBufW = fullW
-      this.fullBufH = fullH
+    const fullLen = fullW * fullH
+    if (!this._fullBuf || this._fullBuf.length !== fullLen) {
+      this._fullBuf = new Float32Array(fullLen)
     }
-
-    // Pick the current buffer and swap the index for next frame.
-    const full = this.fullMaskBuffers[this.fullBufIdx]
-    this.fullBufIdx ^= 1
-
-    // Zero the entire buffer (TypedArray.fill is a fast memset).
+    const full = this._fullBuf
     full.fill(0)
 
     const dstX = Math.round(usedBbox.x * fullW)
@@ -199,9 +299,11 @@ export class RoiCropper {
 
     if (dstW <= 0 || dstH <= 0) return full
 
-    // Fused bilinear resize + remap: compute source coordinates directly.
-    const scaleX = cropMaskW / dstW
-    const scaleY = cropMaskH / dstH
+    const resizeLen = dstW * dstH
+    if (!this._resizeBuf || this._resizeBuf.length !== resizeLen) {
+      this._resizeBuf = new Float32Array(resizeLen)
+    }
+    resizeFloat32Into(cropMask, cropMaskW, cropMaskH, this._resizeBuf, dstW, dstH)
 
     for (let dy = 0; dy < dstH; dy++) {
       const fy = dstY + dy
@@ -218,18 +320,7 @@ export class RoiCropper {
       for (let dx = 0; dx < dstW; dx++) {
         const fx = dstX + dx
         if (fx < 0 || fx >= fullW) continue
-
-        const sx = (dx + 0.5) * scaleX - 0.5
-        const sx0 = Math.floor(sx)
-        const fracX = sx - sx0
-        const ix0 = sx0 < 0 ? 0 : sx0 >= cropMaskW ? cropMaskW - 1 : sx0
-        const ix1 = sx0 + 1 < 0 ? 0 : sx0 + 1 >= cropMaskW ? cropMaskW - 1 : sx0 + 1
-
-        const v =
-          (1 - fracY) * ((1 - fracX) * cropMask[row0 + ix0] + fracX * cropMask[row0 + ix1]) +
-          fracY * ((1 - fracX) * cropMask[row1 + ix0] + fracX * cropMask[row1 + ix1])
-
-        full[fy * fullW + fx] = v
+        full[fy * fullW + fx] = this._resizeBuf[y * dstW + x]
       }
     }
 
@@ -247,16 +338,32 @@ export class RoiCropper {
     this.currentBbox = stabilizeBbox(this.currentBbox, raw)
   }
 
+  /**
+   * Reset the cropper to its initial state (full-frame bbox, no motion history).
+   * Must be called when the segmenter model or resolution changes.
+   */
   reset(): void {
     this.currentBbox = { ...FULL_FRAME }
     this.hasMask = false
     this.frameCounter = 0
+    this.prevLuma = null
+    this.cooldownFrames = 0
+    this._resizeBuf = null
+    this._fullBuf = null
   }
 
+  /**
+   * Returns the current stabilised person bbox (normalised [0, 1]).
+   * Useful for debugging or external visualisation.
+   */
   getCurrentBbox(): BBox {
     return this.currentBbox
   }
 
+  /**
+   * Returns true once the first segmentation mask has been processed and the
+   * internal bbox has been initialised from real data (not the full-frame default).
+   */
   isInitialised(): boolean {
     return this.hasMask
   }
