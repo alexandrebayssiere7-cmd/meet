@@ -9,14 +9,15 @@ import { GpuGuidedFilter } from './GpuGuidedFilter'
  * Pipeline per frame (`render(videoElement)`):
  *   videoTex ← upload from <video>
  *   maskTex  ← uploaded once per new mask (uploadMask)
- *   maskRefined ← post-processing chain (morpho → ema)
+ *   maskRefined ← post-processing chain (sigmoid → morpho → ema)
  *   bgBlur ← (mode === 'blur') maskedDownsample(videoTex, mask)
  *                              → maskWeightedGaussH → maskWeightedGaussV  (half-res)
  *           (mode === 'virtual') virtualBgTex
  *   canvas  ← composite(videoTex, bgBlur, maskRefined)
  *
  * SAFARI: never uses ctx.filter. Every blur is a shader.
- * Guided filter upsampling is implemented on the GPU via GpuGuidedFilter.
+ * NOTE: Guided filter is NOT implemented in shaders here yet — the orchestrator
+ *       falls back to the CPU implementation when guided filter is enabled.
  */
 export class WebGl2Renderer implements GpuRenderer {
   readonly backend = 'webgl2'
@@ -37,6 +38,7 @@ export class WebGl2Renderer implements GpuRenderer {
 
   // programs
   private pUploadMask!: WebGLProgram
+  private pSigmoid!: WebGLProgram
   private pEma!: WebGLProgram
   private pCopyR!: WebGLProgram
   private pMaskedDownsample!: WebGLProgram
@@ -74,22 +76,6 @@ export class WebGl2Renderer implements GpuRenderer {
   private segmoForegroundTintStrength = 0.15
   private _segmoBgMipmapsValid = false
 
-  // Cached uniform locations — populated once in _buildPrograms() to avoid
-  // synchronous gl.getUniformLocation string lookups in the hot render path.
-  private uLocs!: {
-    ema: { uTex: WebGLUniformLocation; uPrev: WebGLUniformLocation; uAlpha: WebGLUniformLocation }
-    copyR: { uTex: WebGLUniformLocation }
-    morphology: { uTex: WebGLUniformLocation; uRadius: WebGLUniformLocation; uTexel: WebGLUniformLocation }
-    maskedDown: { uFrame: WebGLUniformLocation; uMask: WebGLUniformLocation; uSourceTexelSize: WebGLUniformLocation }
-    maskBlur: { uImage: WebGLUniformLocation; uMask: WebGLUniformLocation; uDirection: WebGLUniformLocation; uTexelSize: WebGLUniformLocation; uRadius: WebGLUniformLocation }
-    composite: { uVideo: WebGLUniformLocation; uBg: WebGLUniformLocation; uMask: WebGLUniformLocation; uErosionRadius: WebGLUniformLocation; uOutTexel: WebGLUniformLocation }
-    compositeSegmo: { uVideo: WebGLUniformLocation; uBg: WebGLUniformLocation; uMask: WebGLUniformLocation; uOutTexel: WebGLUniformLocation; uErosionRadius: WebGLUniformLocation }
-    edgeFeather: { uMask: WebGLUniformLocation; uTexel: WebGLUniformLocation; uRadius: WebGLUniformLocation }
-    lightWrap: { uComposite: WebGLUniformLocation; uBg: WebGLUniformLocation; uMask: WebGLUniformLocation; uStrength: WebGLUniformLocation }
-    maskedFg: { uVideo: WebGLUniformLocation; uMask: WebGLUniformLocation }
-    fgColorCast: { uVideo: WebGLUniformLocation; uFgMasked: WebGLUniformLocation; uBg: WebGLUniformLocation; uStrength: WebGLUniformLocation }
-  }
-
   // textures
   private videoTex!: WebGLTexture
   private rawMaskTex!: WebGLTexture // R8 at proc res — uploaded from segmenter
@@ -115,26 +101,24 @@ export class WebGl2Renderer implements GpuRenderer {
   private virtualImgPending: HTMLImageElement | null = null
   private virtualImgUploaded = false
 
-  private _uploadMaskBuf?: Uint8Array
-
   // Reusable CPU buffer for Float32→Uint8 mask conversion (avoids per-frame allocation).
   private u8MaskBuffer?: Uint8Array
 
   // Cached uniform locations — resolved once in _buildPrograms(), reused every frame.
   // Eliminates ~43 string-lookup driver calls per frame.
   private uLoc!: {
-    sigmoid: { uTex: WebGLUniformLocation | null; uSteepness: WebGLUniformLocation | null; uThreshold: WebGLUniformLocation | null }
-    ema: { uTex: WebGLUniformLocation | null; uPrev: WebGLUniformLocation | null; uAlpha: WebGLUniformLocation | null }
-    copyR: { uTex: WebGLUniformLocation | null }
+    sigmoid:    { uTex: WebGLUniformLocation | null; uSteepness: WebGLUniformLocation | null; uThreshold: WebGLUniformLocation | null }
+    ema:        { uTex: WebGLUniformLocation | null; uPrev: WebGLUniformLocation | null; uAlpha: WebGLUniformLocation | null }
+    copyR:      { uTex: WebGLUniformLocation | null }
     morphology: { uTex: WebGLUniformLocation | null; uRadius: WebGLUniformLocation | null; uTexel: WebGLUniformLocation | null }
     maskedDown: { uFrame: WebGLUniformLocation | null; uMask: WebGLUniformLocation | null; uSourceTexelSize: WebGLUniformLocation | null }
-    blur: { uImage: WebGLUniformLocation | null; uMask: WebGLUniformLocation | null; uDirection: WebGLUniformLocation | null; uTexelSize: WebGLUniformLocation | null; uRadius: WebGLUniformLocation | null }
-    composite: { uVideo: WebGLUniformLocation | null; uBg: WebGLUniformLocation | null; uMask: WebGLUniformLocation | null; uErosionRadius: WebGLUniformLocation | null; uOutTexel: WebGLUniformLocation | null }
-    segmo: { uVideo: WebGLUniformLocation | null; uBg: WebGLUniformLocation | null; uMask: WebGLUniformLocation | null; uOutTexel: WebGLUniformLocation | null }
-    feather: { uMask: WebGLUniformLocation | null; uTexel: WebGLUniformLocation | null; uRadius: WebGLUniformLocation | null }
-    lightWrap: { uComposite: WebGLUniformLocation | null; uBg: WebGLUniformLocation | null; uMask: WebGLUniformLocation | null; uStrength: WebGLUniformLocation | null }
-    maskedFg: { uVideo: WebGLUniformLocation | null; uMask: WebGLUniformLocation | null }
-    fgCast: { uVideo: WebGLUniformLocation | null; uFgMasked: WebGLUniformLocation | null; uBg: WebGLUniformLocation | null; uStrength: WebGLUniformLocation | null }
+    blur:       { uImage: WebGLUniformLocation | null; uMask: WebGLUniformLocation | null; uDirection: WebGLUniformLocation | null; uTexelSize: WebGLUniformLocation | null; uRadius: WebGLUniformLocation | null }
+    composite:  { uVideo: WebGLUniformLocation | null; uBg: WebGLUniformLocation | null; uMask: WebGLUniformLocation | null; uErosionRadius: WebGLUniformLocation | null; uOutTexel: WebGLUniformLocation | null }
+    segmo:      { uVideo: WebGLUniformLocation | null; uBg: WebGLUniformLocation | null; uMask: WebGLUniformLocation | null; uOutTexel: WebGLUniformLocation | null }
+    feather:    { uMask: WebGLUniformLocation | null; uTexel: WebGLUniformLocation | null; uRadius: WebGLUniformLocation | null }
+    lightWrap:  { uComposite: WebGLUniformLocation | null; uBg: WebGLUniformLocation | null; uMask: WebGLUniformLocation | null; uStrength: WebGLUniformLocation | null }
+    maskedFg:   { uVideo: WebGLUniformLocation | null; uMask: WebGLUniformLocation | null }
+    fgCast:     { uVideo: WebGLUniformLocation | null; uFgMasked: WebGLUniformLocation | null; uBg: WebGLUniformLocation | null; uStrength: WebGLUniformLocation | null }
   }
 
   /**
@@ -179,9 +163,9 @@ export class WebGl2Renderer implements GpuRenderer {
     gl.viewport(0, 0, this.outW, this.outH)
     // HTML element uploads (video, virtual bg image) get Y-flipped on upload so
     // that texture coord (0,0) corresponds to the BOTTOM-LEFT pixel of the source
-    // image — matching WebGL's bottom-up coord system. Note: UNPACK_FLIP_Y_WEBGL
-    // also applies to typed-array uploads (texSubImage2D), so the mask data is
-    // automatically flipped and can be sampled directly with vUv.
+    // image — matching WebGL's bottom-up coord system. Mask typed-array uploads
+    // are not affected (UNPACK_FLIP_Y_WEBGL does not apply); we compensate by
+    // sampling the mask with `(x, 1-y)` in the composite shader.
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true)
 
     try {
@@ -573,7 +557,7 @@ export class WebGl2Renderer implements GpuRenderer {
       }
     }
     const radius = this.upsamplingCfg.radius ?? 8
-    const eps = this.upsamplingCfg.eps ?? 0.01
+    const eps    = this.upsamplingCfg.eps    ?? 0.01
     return this.gf.run(this.videoTex, procMaskTex, radius, eps, this.vao)
   }
 
@@ -620,6 +604,7 @@ export class WebGl2Renderer implements GpuRenderer {
     if (this.vao) gl.deleteVertexArray(this.vao)
     const programs = [
       this.pUploadMask,
+      this.pSigmoid,
       this.pEma,
       this.pCopyR,
       this.pMaskedDownsample,
@@ -865,7 +850,7 @@ export class WebGl2Renderer implements GpuRenderer {
    *
    * Intentionally does NOT include the erosion step from the standard compositor:
    * segmo's transition-zone matting subsumes that need. The user-selectable
-   * postprocess chain (morphology/EMA/guided-upsample) ran upstream and
+   * postprocess chain (sigmoid/morphology/EMA/guided-upsample) ran upstream and
    * is unaffected.
    */
   private _segmoLogged = false
@@ -1329,6 +1314,19 @@ void main() {
   fragColor = texture(uTex, vUv);
 }`
 
+    const FS_SIGMOID = `#version 300 es
+precision mediump float;
+in vec2 vUv;
+uniform sampler2D uTex;
+uniform float uSteepness;
+uniform float uThreshold;
+out vec4 fragColor;
+void main() {
+  float v = texture(uTex, vUv).r;
+  float y = 1.0 / (1.0 + exp(-uSteepness * (v - uThreshold)));
+  fragColor = vec4(y, 0.0, 0.0, 1.0);
+}`
+
     const FS_EMA = `#version 300 es
 precision mediump float;
 in vec2 vUv;
@@ -1434,11 +1432,12 @@ void main() {
 }`
 
     this.pUploadMask = this._link(VS, FS_COPY_R)
+    this.pSigmoid = this._link(VS, FS_SIGMOID)
     this.pEma = this._link(VS, FS_EMA)
     this.pCopyR = this._link(VS, FS_COPY_R)
     this.pMaskedDownsample = this._link(VS, FS_MASKED_DOWNSAMPLE)
     this.pMaskWeightedBlur = this._link(VS, FS_MASK_WEIGHTED_BLUR)
-
+    
     const FS_MORPHOLOGY = `#version 300 es
 precision mediump float;
 in vec2 vUv;
@@ -1482,7 +1481,6 @@ uniform sampler2D uVideo;     // Full-res camera frame
 uniform sampler2D uBg;        // Virtual background (full-res)
 uniform sampler2D uMask;      // Final processed mask
 uniform vec2 uOutTexel;       // (1/outW, 1/outH)
-uniform float uErosionRadius;
 out vec4 fragColor;
 
 // Cross-shaped sample pattern: wider reach for fg/bg color estimation (13 samples)
@@ -1495,16 +1493,6 @@ const vec2 mOff[13] = vec2[13](
 
 void main() {
   float rawMask = texture(uMask, vUv).r;
-  if (uErosionRadius > 0.0) {
-    for (int i = 1; i <= 16; i++) {
-      if (float(i) > uErosionRadius) break;
-      float fi = float(i);
-      rawMask = min(rawMask, texture(uMask, vUv + vec2(uOutTexel.x * fi, 0.0)).r);
-      rawMask = min(rawMask, texture(uMask, vUv - vec2(uOutTexel.x * fi, 0.0)).r);
-      rawMask = min(rawMask, texture(uMask, vUv + vec2(0.0, uOutTexel.y * fi)).r);
-      rawMask = min(rawMask, texture(uMask, vUv - vec2(0.0, uOutTexel.y * fi)).r);
-    }
-  }
   vec3 I = texture(uVideo, vUv).rgb;
 
   // Edge-adaptive sharpening: narrow the mask transition at strong camera edges
@@ -1718,18 +1706,18 @@ void main() {
     // through the GL driver which can stall the CPU-GPU pipeline.
     const loc = (p: WebGLProgram, n: string) => this.gl.getUniformLocation(p, n)
     this.uLoc = {
-      sigmoid: { uTex: loc(this.pSigmoid, 'uTex'), uSteepness: loc(this.pSigmoid, 'uSteepness'), uThreshold: loc(this.pSigmoid, 'uThreshold') },
-      ema: { uTex: loc(this.pEma, 'uTex'), uPrev: loc(this.pEma, 'uPrev'), uAlpha: loc(this.pEma, 'uAlpha') },
-      copyR: { uTex: loc(this.pCopyR, 'uTex') },
+      sigmoid:    { uTex: loc(this.pSigmoid, 'uTex'), uSteepness: loc(this.pSigmoid, 'uSteepness'), uThreshold: loc(this.pSigmoid, 'uThreshold') },
+      ema:        { uTex: loc(this.pEma, 'uTex'), uPrev: loc(this.pEma, 'uPrev'), uAlpha: loc(this.pEma, 'uAlpha') },
+      copyR:      { uTex: loc(this.pCopyR, 'uTex') },
       morphology: { uTex: loc(this.pMorphology, 'uTex'), uRadius: loc(this.pMorphology, 'uRadius'), uTexel: loc(this.pMorphology, 'uTexel') },
       maskedDown: { uFrame: loc(this.pMaskedDownsample, 'uFrame'), uMask: loc(this.pMaskedDownsample, 'uMask'), uSourceTexelSize: loc(this.pMaskedDownsample, 'uSourceTexelSize') },
-      blur: { uImage: loc(this.pMaskWeightedBlur, 'uImage'), uMask: loc(this.pMaskWeightedBlur, 'uMask'), uDirection: loc(this.pMaskWeightedBlur, 'uDirection'), uTexelSize: loc(this.pMaskWeightedBlur, 'uTexelSize'), uRadius: loc(this.pMaskWeightedBlur, 'uRadius') },
-      composite: { uVideo: loc(this.pComposite, 'uVideo'), uBg: loc(this.pComposite, 'uBg'), uMask: loc(this.pComposite, 'uMask'), uErosionRadius: loc(this.pComposite, 'uErosionRadius'), uOutTexel: loc(this.pComposite, 'uOutTexel') },
-      segmo: { uVideo: loc(this.pCompositeSegmo, 'uVideo'), uBg: loc(this.pCompositeSegmo, 'uBg'), uMask: loc(this.pCompositeSegmo, 'uMask'), uOutTexel: loc(this.pCompositeSegmo, 'uOutTexel') },
-      feather: { uMask: loc(this.pSegmoEdgeFeather, 'uMask'), uTexel: loc(this.pSegmoEdgeFeather, 'uTexel'), uRadius: loc(this.pSegmoEdgeFeather, 'uRadius') },
-      lightWrap: { uComposite: loc(this.pLightWrap, 'uComposite'), uBg: loc(this.pLightWrap, 'uBg'), uMask: loc(this.pLightWrap, 'uMask'), uStrength: loc(this.pLightWrap, 'uStrength') },
-      maskedFg: { uVideo: loc(this.pMaskedFg, 'uVideo'), uMask: loc(this.pMaskedFg, 'uMask') },
-      fgCast: { uVideo: loc(this.pFgColorCast, 'uVideo'), uFgMasked: loc(this.pFgColorCast, 'uFgMasked'), uBg: loc(this.pFgColorCast, 'uBg'), uStrength: loc(this.pFgColorCast, 'uStrength') },
+      blur:       { uImage: loc(this.pMaskWeightedBlur, 'uImage'), uMask: loc(this.pMaskWeightedBlur, 'uMask'), uDirection: loc(this.pMaskWeightedBlur, 'uDirection'), uTexelSize: loc(this.pMaskWeightedBlur, 'uTexelSize'), uRadius: loc(this.pMaskWeightedBlur, 'uRadius') },
+      composite:  { uVideo: loc(this.pComposite, 'uVideo'), uBg: loc(this.pComposite, 'uBg'), uMask: loc(this.pComposite, 'uMask'), uErosionRadius: loc(this.pComposite, 'uErosionRadius'), uOutTexel: loc(this.pComposite, 'uOutTexel') },
+      segmo:      { uVideo: loc(this.pCompositeSegmo, 'uVideo'), uBg: loc(this.pCompositeSegmo, 'uBg'), uMask: loc(this.pCompositeSegmo, 'uMask'), uOutTexel: loc(this.pCompositeSegmo, 'uOutTexel') },
+      feather:    { uMask: loc(this.pSegmoEdgeFeather, 'uMask'), uTexel: loc(this.pSegmoEdgeFeather, 'uTexel'), uRadius: loc(this.pSegmoEdgeFeather, 'uRadius') },
+      lightWrap:  { uComposite: loc(this.pLightWrap, 'uComposite'), uBg: loc(this.pLightWrap, 'uBg'), uMask: loc(this.pLightWrap, 'uMask'), uStrength: loc(this.pLightWrap, 'uStrength') },
+      maskedFg:   { uVideo: loc(this.pMaskedFg, 'uVideo'), uMask: loc(this.pMaskedFg, 'uMask') },
+      fgCast:     { uVideo: loc(this.pFgColorCast, 'uVideo'), uFgMasked: loc(this.pFgColorCast, 'uFgMasked'), uBg: loc(this.pFgColorCast, 'uBg'), uStrength: loc(this.pFgColorCast, 'uStrength') },
     }
   }
 }

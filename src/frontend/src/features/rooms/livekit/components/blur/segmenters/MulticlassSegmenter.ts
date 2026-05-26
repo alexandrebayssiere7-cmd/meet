@@ -84,7 +84,6 @@ export class MulticlassSegmenter implements Segmenter {
             const v = 1 - bg[i]
             out[i] = v < 0 ? 0 : v > 1 ? 1 : v
           }
-          result.close()
           resolve(out)
         }
       )

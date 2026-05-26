@@ -11,21 +11,6 @@ import {
   ProcessorType,
   SegmentationModel,
 } from '../blur'
-
-const PRODUCTION_MODEL: SegmentationModel = SegmentationModel.AUTO
-const PRODUCTION_PRE_PROCESSING: PreProcessingConfig = {
-  roiCropping: { enabled: true },
-}
-const PRODUCTION_POST_PROCESSING: PostProcessingConfig = {
-  erosion: { pixels: 3 },
-  ema: { alpha: 0.7 },
-  closing: { radius: 3 },
-}
-const PRODUCTION_UPSAMPLING: UpsamplingConfig = {
-  method: 'guided',
-  radius: 8,
-  eps: 1.0e-2,
-}
 import { css } from '@/styled-system/css'
 import { Button, Dialog, H, P, Text, ToggleButton } from '@/primitives'
 import { VisualOnlyTooltip } from '@/primitives/VisualOnlyTooltip'
@@ -105,6 +90,58 @@ function deriveIdFromProcessorConfig(config: ProcessorConfig) {
   }
   throw new Error(`Unknown config type in config: ${config}`)
 }
+
+type SliderRowProps = {
+  label: string
+  displayValue: string
+  value: number
+  min: number
+  max: number
+  step: number
+  disabled?: boolean
+  onChange: (v: number) => void
+}
+
+const SliderRow = ({
+  label,
+  displayValue,
+  value,
+  min,
+  max,
+  step,
+  disabled,
+  onChange,
+}: SliderRowProps) => (
+  <label
+    className={css({
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '0.15rem',
+      fontSize: 'sm',
+      paddingLeft: '1.4rem',
+      marginTop: '0.15rem',
+    })}
+    style={{ opacity: disabled ? 0.5 : 1 }}
+  >
+    <span>
+      {label} : <strong>{displayValue}</strong>
+    </span>
+    <input
+      type="range"
+      min={min}
+      max={max}
+      step={step}
+      value={value}
+      disabled={disabled}
+      onChange={(e) => onChange(Number(e.target.value))}
+      className={css({
+        width: '100%',
+        cursor: 'pointer',
+        _disabled: { cursor: 'not-allowed' },
+      })}
+    />
+  </label>
+)
 
 // We use a valtio store so that the state is persisted between the join room
 // and the actual room
@@ -636,19 +673,19 @@ export const EffectsConfiguration = ({
       className={css(
         layout === 'vertical'
           ? {
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '1.5rem',
-          }
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '1.5rem',
+            }
           : {
-            display: 'flex',
-            gap: '1.5rem',
-            flexDirection: 'column',
-            md: {
-              flexDirection: 'row',
-              overflow: 'hidden',
-            },
-          }
+              display: 'flex',
+              gap: '1.5rem',
+              flexDirection: 'column',
+              md: {
+                flexDirection: 'row',
+                overflow: 'hidden',
+              },
+            }
       )}
     >
       <div
@@ -710,13 +747,13 @@ export const EffectsConfiguration = ({
         className={css(
           layout === 'horizontal'
             ? {
-              md: {
-                borderLeft: '1px solid greyscale.250',
-                paddingLeft: '1.5rem',
-                width: '420px',
-                flexShrink: 0,
-              },
-            }
+                md: {
+                  borderLeft: '1px solid greyscale.250',
+                  paddingLeft: '1.5rem',
+                  width: '420px',
+                  flexShrink: 0,
+                },
+              }
             : {}
         )}
       >
@@ -768,6 +805,18 @@ export const EffectsConfiguration = ({
                       <Icon />
                     </ToggleButton>
                   ))}
+                </div>
+                <div className={css({ marginTop: '0.6rem' })}>
+                  <SliderRow
+                    label={t('advanced.params.blurRadius')}
+                    displayValue={`${blurRadiusValue} px`}
+                    value={blurRadiusValue}
+                    min={1}
+                    max={50}
+                    step={1}
+                    disabled={processorOptions.isDisabled}
+                    onChange={applyBlurRadius}
+                  />
                 </div>
               </div>
 
@@ -949,8 +998,8 @@ export const EffectsConfiguration = ({
                         (canUploadBackground &&
                           filesQ.data &&
                           filesQ.data.count >=
-                          (appConfig?.background_image?.max_count_by_user ??
-                            0)) ||
+                            (appConfig?.background_image?.max_count_by_user ??
+                              0)) ||
                         processorOptions.isDisabled ||
                         createFileMutation.isPending
                       }
@@ -1018,6 +1067,7 @@ export const EffectsConfiguration = ({
                   ))}
                 </div>
               </div>
+
 
             </div>
           </div>

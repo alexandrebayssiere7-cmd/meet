@@ -15,6 +15,8 @@ export type MattingErrorCode =
   | 'GUIDED_FILTER_INIT_FAILED'
   | 'POSTPROCESS_SHADER_COMPILE_FAILED'
   | 'VIRTUAL_BG_LOAD_FAILED'
+  | 'RVM_INIT_FAILED'
+  | 'RVM_INFERENCE_FAILED'
 
 /**
  * Severity level of a matting error, mapped to the corresponding console method.

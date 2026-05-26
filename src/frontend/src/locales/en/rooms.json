@@ -254,8 +254,6 @@
     "notAvailable": "Video effects will be available soon on your browser. We're working on it! In the meantime, you can use Google Chrome for best performance or Firefox :(",
     "heading": "Blur",
     "clear": "Disable effect",
-<<<<<<< HEAD
-=======
     "advanced": {
       "title": "Advanced settings",
       "model": {
@@ -299,7 +297,6 @@
       },
       "apply": "Apply"
     },
->>>>>>> arthur_main
     "blur": {
       "title": "Background blur",
       "status": {

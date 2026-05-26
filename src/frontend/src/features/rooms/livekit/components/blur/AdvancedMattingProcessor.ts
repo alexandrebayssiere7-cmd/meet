@@ -13,13 +13,9 @@ import { BBox } from './preprocessing/RoiCropper'
 import { Segmenter, createSegmenter, probeMediapipeDelegate } from './segmenters'
 import { WebGl2Renderer } from './renderers/WebGl2Renderer'
 import { pushMattingError } from './errors/MattingErrorStore'
-import {
-  CLEAR_TIMEOUT,
-  SET_TIMEOUT,
-  TIMEOUT_TICK,
-  timerWorkerScript,
-} from './TimerWorker'
 
+const SEGMENTATION_MASK_CANVAS_ID = 'background-blur-local-segmentation'
+const BLUR_CANVAS_ID = 'background-blur-local'
 const DEFAULT_BLUR = 10
 
 /**
@@ -50,6 +46,7 @@ interface FrameMaskPair {
  *                     frame as long as the pair is younger than N frames
  *                     (latency vs. halo trade-off, user-controlled).
  *
+ * Decoupling prevents RVM's ~20-50ms inference from introducing render jitter.
  * All blur passes run in GLSL shaders — no ctx.filter (unreliable on Safari).
  */
 export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
@@ -239,9 +236,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
         if (this.processedTrack && this.processedTrack !== this.source) {
           try {
             this.processedTrack.stop()
-          } catch {
-            // Ignored
-          }
+          } catch { }
         }
         this.processedTrack = undefined
         return
@@ -290,6 +285,8 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     const prevConfigured = this._configuredModel
     const newModel = this._getModel(opts)
     this._configuredModel = newModel
+    const prevRvmRatio = this._getRvmRatio(this.options)
+    const nextRvmRatio = this._getRvmRatio(opts)
 
     this._initVirtualBackgroundImage()
 
@@ -299,6 +296,14 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       } else {
         this._initSegmenterBackground(newModel)
       }
+    } else if (
+      newModel === SegmentationModel.RVM &&
+      nextRvmRatio !== prevRvmRatio &&
+      this.segmenter instanceof RVMSegmenter
+    ) {
+      this.segmenter.setDownsampleRatio(
+        nextRvmRatio ?? this._autoRvmRatio()
+      )
     }
     this._applyRendererConfig()
   }
@@ -357,7 +362,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
 
       try {
         await seg.segment(dummyData, performance.now())
-      } catch {
+      } catch (warmupErr) {
         console.warn(
           '%c┌────────────────────────────────────────────────────────────┐\n' +
           '│ [AMP BENCHMARK] WARM-UP FAILED                             │\n' +
@@ -380,7 +385,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       }
 
       const avg = totalTime / runs
-      const success = avg <= 35
+      const success = avg <= 30
 
       const widthCard = 60
       const padRight = (str: string, len: number) => str + ' '.repeat(Math.max(0, len - str.length))
@@ -439,7 +444,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       )
 
       return success
-    } catch {
+    } catch (e) {
       console.warn(
         '%c┌────────────────────────────────────────────────────────────┐\n' +
         '│ [AMP BENCHMARK] ERROR ENCOUNTERED                          │\n' +
@@ -567,7 +572,10 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
         targetModel = SegmentationModel.MULTICLASS
       }
 
-      let seg = createSegmenter(targetModel)
+      let seg = createSegmenter(targetModel, {
+        rvmDownsampleRatio:
+          this._getRvmRatio(this.options) ?? this._autoRvmRatio(),
+      })
       await seg.init()
 
       if (this._destroyed || this._pendingModel !== model) {
@@ -630,7 +638,10 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
         targetModel = SegmentationModel.MULTICLASS
       }
 
-      let seg = createSegmenter(targetModel)
+      let seg = createSegmenter(targetModel, {
+        rvmDownsampleRatio:
+          this._getRvmRatio(this.options) ?? this._autoRvmRatio(),
+      })
       await seg.init()
 
       if (this._destroyed || this._pendingModel !== model) {
@@ -756,37 +767,6 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     this._scheduleRender()
   }
 
-  private _sleepWithWorker(ms: number): Promise<void> {
-    return new Promise((resolve, reject) => {
-      if (this._destroyed) {
-        reject(new Error('Processor destroyed'))
-        return
-      }
-      if (!this._timerWorker) {
-        this._timerWorker = new Worker(timerWorkerScript, { name: 'AdvancedMatting' })
-      }
-      const cleanup = () => {
-        this._timerWorker?.removeEventListener('message', listener)
-        if (this._cancelPendingSleep === cancelCleanup) {
-          this._cancelPendingSleep = null
-        }
-      }
-      const listener = (response: MessageEvent) => {
-        if (response.data.id === TIMEOUT_TICK) {
-          cleanup()
-          resolve()
-        }
-      }
-      const cancelCleanup = () => {
-        cleanup()
-        resolve() // Resolve cleanly on destruction to prevent unhandled promise rejection
-      }
-      this._cancelPendingSleep = cancelCleanup
-      this._timerWorker.addEventListener('message', listener)
-      this._timerWorker.postMessage({ id: SET_TIMEOUT, timeMs: ms })
-    })
-  }
-
   /**
    * Segmenter loop: runs at most 50fps. Each iteration captures the current
    * <video> frame as an ImageBitmap (GPU-backed snapshot), runs inference, and
@@ -794,12 +774,12 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
    * to keep memory bounded to a single in-flight pair.
    */
   private async _runSegmenterLoop(): Promise<void> {
-    const TARGET_MS = 1000 / 30
+    const TARGET_MS = 1000 / 50
     while (this._segLoopActive && !this._destroyed) {
       const t0 = performance.now()
       const seg = this.segmenter
       if (!seg || !this.videoElement || this.videoElement.videoWidth === 0) {
-        await this._sleepWithWorker(TARGET_MS)
+        await new Promise<void>(r => setTimeout(r, TARGET_MS))
         continue
       }
       let capturedSource: ImageBitmap | null = null
@@ -875,14 +855,14 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
           level: 'warn',
           detail: e instanceof Error ? `${e.name}: ${e.message}` : String(e),
         })
-        await this._sleepWithWorker(100)
+        await new Promise<void>(r => setTimeout(r, 100))
         continue
       }
       // Always yield to the event loop; sleep for whatever is left of 20ms.
       // If inference took longer than one frame period, setTimeout(0) still
       // lets the browser process render callbacks and input before looping.
       const elapsed = performance.now() - t0
-      await this._sleepWithWorker(Math.max(0, TARGET_MS - elapsed))
+      await new Promise<void>(r => setTimeout(r, Math.max(0, TARGET_MS - elapsed)))
     }
   }
 
@@ -897,33 +877,11 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
    * when the browser fires rAF at a higher rate.
    */
   private _scheduleRender(): void {
-    if (!this._segLoopActive || this._destroyed) return
-
-    // Modern synchronization: requestVideoFrameCallback
-    if (this.videoElement && 'requestVideoFrameCallback' in this.videoElement) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      this._renderLoopHandle = (this.videoElement as any).requestVideoFrameCallback(() => {
-        if (!this._segLoopActive || this._destroyed) return
-        try {
-          this._renderFrame()
-        } catch (e) {
-          console.error('[AdvancedMattingProcessor] Render frame failed, skipping:', e)
-        }
-        this._scheduleRender()
-      })
-      return
-    }
-
-    // Fallback: requestAnimationFrame with 50fps capping
+    if (!this._segLoopActive) return
     this._renderLoopHandle = requestAnimationFrame((now) => {
-      if (!this._segLoopActive || this._destroyed) return
       if (now - this._lastRenderTime >= AdvancedMattingProcessor.RENDER_TARGET_MS) {
         this._lastRenderTime = now
-        try {
-          this._renderFrame()
-        } catch (e) {
-          console.error('[AdvancedMattingProcessor] Render frame failed (fallback), skipping:', e)
-        }
+        this._renderFrame()
       }
       this._scheduleRender()
     })
@@ -934,12 +892,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
    */
   private _cancelRender(): void {
     if (this._renderLoopHandle === null) return
-    if (this.videoElement && 'cancelVideoFrameCallback' in this.videoElement) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (this.videoElement as any).cancelVideoFrameCallback(this._renderLoopHandle)
-    } else {
-      cancelAnimationFrame(this._renderLoopHandle)
-    }
+    cancelAnimationFrame(this._renderLoopHandle)
     this._renderLoopHandle = null
   }
 
@@ -1105,11 +1058,16 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
    * @param h Canvas height in pixels (= camera frame height).
    */
   private _createMainCanvasWithSize(w: number, h: number) {
-    if (!this.outputCanvas) {
-      this.outputCanvas = document.createElement('canvas')
+    let canvas = document.querySelector(
+      `canvas#${BLUR_CANVAS_ID}`
+    ) as HTMLCanvasElement | null
+    if (!canvas) {
+      canvas = this._createCanvas(BLUR_CANVAS_ID, w, h)
+    } else {
+      canvas.setAttribute('width', '' + w)
+      canvas.setAttribute('height', '' + h)
     }
-    this.outputCanvas.width = w
-    this.outputCanvas.height = h
+    this.outputCanvas = canvas
   }
 
   /**
@@ -1118,12 +1076,21 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
    * repeated `getImageData()` calls.
    */
   private _createMaskCanvas() {
-    if (!this.segmentationMaskCanvas) {
-      this.segmentationMaskCanvas = document.createElement('canvas')
+    let canvas = document.querySelector(
+      `#${SEGMENTATION_MASK_CANVAS_ID}`
+    ) as HTMLCanvasElement | null
+    if (!canvas) {
+      canvas = this._createCanvas(
+        SEGMENTATION_MASK_CANVAS_ID,
+        this.processingWidth,
+        this.processingHeight
+      )
+    } else {
+      canvas.setAttribute('width', '' + this.processingWidth)
+      canvas.setAttribute('height', '' + this.processingHeight)
     }
-    this.segmentationMaskCanvas.width = this.processingWidth
-    this.segmentationMaskCanvas.height = this.processingHeight
-    this.segmentationMaskCanvasCtx = this.segmentationMaskCanvas.getContext('2d', {
+    this.segmentationMaskCanvas = canvas
+    this.segmentationMaskCanvasCtx = canvas.getContext('2d', {
       willReadFrequently: true,
     })!
   }
@@ -1172,15 +1139,6 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     }
     this.segmenter?.destroy()
     this.segmenter = undefined
-    if (this._cancelPendingSleep) {
-      this._cancelPendingSleep()
-      this._cancelPendingSleep = null
-    }
-    if (this._timerWorker) {
-      this._timerWorker.postMessage({ id: CLEAR_TIMEOUT })
-      this._timerWorker.terminate()
-      this._timerWorker = undefined
-    }
     this.gpuRenderer?.destroy()
     this.gpuRenderer = undefined
     this._preProcessingPipeline = undefined

@@ -254,8 +254,6 @@
     "notAvailable": "Video-effecten zijn binnenkort beschikbaar in uw browser. We werken eraan! In de tussentijd kunt u Google Chrome gebruiken voor de beste prestaties of Firefox :(",
     "heading": "Vervaging",
     "clear": "Effect uitschakelen",
-<<<<<<< HEAD
-=======
     "advanced": {
       "title": "Geavanceerde instellingen",
       "model": {
@@ -299,7 +297,6 @@
       },
       "apply": "Toepassen"
     },
->>>>>>> arthur_main
     "blur": {
       "title": "Achtergrondvervaging",
       "status": {

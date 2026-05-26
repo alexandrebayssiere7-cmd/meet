@@ -132,12 +132,11 @@ function resizeFloat32Into(
       const ix1 = sx1 < 0 ? 0 : sx1 >= srcW ? srcW - 1 : sx1
 
       const v = (1 - fy) * ((1 - fx) * src[iy0 * srcW + ix0] + fx * src[iy0 * srcW + ix1]) +
-        fy * ((1 - fx) * src[iy1 * srcW + ix0] + fx * src[iy1 * srcW + ix1])
+                      fy  * ((1 - fx) * src[iy1 * srcW + ix0] + fx * src[iy1 * srcW + ix1])
       dst[dy * dstW + dx] = v
     }
   }
 }
-*/
 
 /**
  * ROI Cropper — maintains a stabilised bounding box of the person across frames.
@@ -147,9 +146,6 @@ function resizeFloat32Into(
  *   2. model.segment(croppedFrame)                 → maskInCropSpace
  *   3. fullMask = roiCropper.remapMask(maskInCropSpace, maskW, maskH, bbox)
  *   4. roiCropper.updateWithMask(fullMask, maskW, maskH)
- *
- * Zero-allocation design: two pre-allocated Float32Arrays are alternated each
- * frame (ring-buffer / double buffering) so the hot path never triggers GC.
  */
 export class RoiCropper {
   private currentBbox: BBox = { ...FULL_FRAME }
@@ -161,23 +157,6 @@ export class RoiCropper {
   // Reusable buffers — avoids per-frame Float32Array allocations in remapMask/resizeFloat32.
   private _resizeBuf: Float32Array | null = null
   private _fullBuf: Float32Array | null = null
-
-  // Pre-allocated ring-buffer for remapMask output. Sized for the maximum
-  // processing resolution the pipeline supports (256×256). The caller receives
-  // a reference that stays valid until the NEXT remapMask call.
-  private fullMaskBuffers: [Float32Array, Float32Array]
-  private fullBufIdx = 0
-  private fullBufW = 0
-  private fullBufH = 0
-
-  constructor(maxW = 256, maxH = 256) {
-    this.fullMaskBuffers = [
-      new Float32Array(maxW * maxH),
-      new Float32Array(maxW * maxH),
-    ]
-    this.fullBufW = maxW
-    this.fullBufH = maxH
-  }
 
   /** Returns the stabilised bbox to use when extracting the model input for this frame. */
   getNextCropBbox(
@@ -271,11 +250,8 @@ export class RoiCropper {
 
   /**
    * Remap a mask that lives in crop-bbox space back to the full-frame mask space.
-   *
-   * Fused remap + bilinear resize in a single pass: for each destination pixel
-   * that falls inside the bbox region, compute its source coordinate in the
-   * crop mask, bilinearly interpolate, and write directly into the pre-allocated
-   * output buffer. All other pixels are zeroed. Zero allocations per call.
+   * Creates a zero-filled fullW×fullH array and pastes the resized crop mask at
+   * the correct position.
    */
   remapMask(
     cropMask: Float32Array,
@@ -305,20 +281,11 @@ export class RoiCropper {
     }
     resizeFloat32Into(cropMask, cropMaskW, cropMaskH, this._resizeBuf, dstW, dstH)
 
-    for (let dy = 0; dy < dstH; dy++) {
-      const fy = dstY + dy
+    for (let y = 0; y < dstH; y++) {
+      const fy = dstY + y
       if (fy < 0 || fy >= fullH) continue
-
-      const sy = (dy + 0.5) * scaleY - 0.5
-      const sy0 = Math.floor(sy)
-      const fracY = sy - sy0
-      const iy0 = sy0 < 0 ? 0 : sy0 >= cropMaskH ? cropMaskH - 1 : sy0
-      const iy1 = sy0 + 1 < 0 ? 0 : sy0 + 1 >= cropMaskH ? cropMaskH - 1 : sy0 + 1
-      const row0 = iy0 * cropMaskW
-      const row1 = iy1 * cropMaskW
-
-      for (let dx = 0; dx < dstW; dx++) {
-        const fx = dstX + dx
+      for (let x = 0; x < dstW; x++) {
+        const fx = dstX + x
         if (fx < 0 || fx >= fullW) continue
         full[fy * fullW + fx] = this._resizeBuf[y * dstW + x]
       }
@@ -368,4 +335,3 @@ export class RoiCropper {
     return this.hasMask
   }
 }
-

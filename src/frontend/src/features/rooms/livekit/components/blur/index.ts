@@ -69,26 +69,26 @@ export type PreProcessingConfig = {
  */
 export type ProcessorConfig =
   | {
-    type: ProcessorType.BLUR
-    blurRadius: number
-    model?: SegmentationModel
-    preProcessing?: PreProcessingConfig
-    rvmDownsampleRatio?: number
-    postProcessing?: PostProcessingConfig
-    upsampling?: UpsamplingConfig
-    maxFrameOffset?: number
-  }
+      type: ProcessorType.BLUR
+      blurRadius: number
+      model?: SegmentationModel
+      preProcessing?: PreProcessingConfig
+      rvmDownsampleRatio?: number
+      postProcessing?: PostProcessingConfig
+      upsampling?: UpsamplingConfig
+      maxFrameOffset?: number
+    }
   | {
-    type: ProcessorType.VIRTUAL
-    imagePath: string
-    fileId?: string
-    model?: SegmentationModel
-    preProcessing?: PreProcessingConfig
-    rvmDownsampleRatio?: number
-    postProcessing?: PostProcessingConfig
-    upsampling?: UpsamplingConfig
-    maxFrameOffset?: number
-  }
+      type: ProcessorType.VIRTUAL
+      imagePath: string
+      fileId?: string
+      model?: SegmentationModel
+      preProcessing?: PreProcessingConfig
+      rvmDownsampleRatio?: number
+      postProcessing?: PostProcessingConfig
+      upsampling?: UpsamplingConfig
+      maxFrameOffset?: number
+    }
   | ({ type: ProcessorType.FACE_LANDMARKS } & FaceLandmarksOptions)
 
 /**

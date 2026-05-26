@@ -254,8 +254,6 @@
     "notAvailable": "Les effets vidéo seront bientôt disponibles sur votre navigateur. Nous y travaillons ! En attendant, vous pouvez utiliser Google Chrome pour de meilleures performances ou Firefox :(",
     "heading": "Flou",
     "clear": "Désactiver l'effet",
-<<<<<<< HEAD
-=======
     "advanced": {
       "title": "Paramètres avancés",
       "model": {
@@ -299,7 +297,6 @@
       },
       "apply": "Appliquer"
     },
->>>>>>> arthur_main
     "blur": {
       "title": "Flou d'arrière-plan",
       "status": {
