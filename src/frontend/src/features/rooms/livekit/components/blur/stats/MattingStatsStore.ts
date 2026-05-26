@@ -31,6 +31,7 @@ export interface MattingStatsState {
   effectiveLatencyMode: MaskBlendMode | null
   maskOffsetUv: { u: number; v: number }
   predictionActive: boolean
+  segmenterFrameSkip: number
 }
 
 export const mattingStatsStore = proxy<MattingStatsState>({
@@ -49,6 +50,7 @@ export const mattingStatsStore = proxy<MattingStatsState>({
   effectiveLatencyMode: null,
   maskOffsetUv: { u: 0, v: 0 },
   predictionActive: false,
+  segmenterFrameSkip: 2,
 })
 
 const BUF_SIZE = 50
@@ -219,6 +221,10 @@ export function setPredictionActive(active: boolean): void {
   mattingStatsStore.predictionActive = active
 }
 
+export function setSegmenterFrameSkip(skip: number): void {
+  mattingStatsStore.segmenterFrameSkip = skip
+}
+
 export function resetMattingStats(): void {
   latencyBuf.reset()
   gapBuf.reset()
@@ -236,6 +242,7 @@ export function resetMattingStats(): void {
   mattingStatsStore.effectiveLatencyMode = null
   mattingStatsStore.maskOffsetUv = { u: 0, v: 0 }
   mattingStatsStore.predictionActive = false
+  mattingStatsStore.segmenterFrameSkip = 2
   lastFlush = 0
   pendingFlush = false
 }

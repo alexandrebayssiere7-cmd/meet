@@ -28,6 +28,7 @@ import {
   setMattingStatsModel,
   setMotionScore,
   setPredictionActive,
+  setSegmenterFrameSkip,
   tickCameraFrame,
   tickRenderFrame,
   tickSegmenterFrame,
@@ -169,6 +170,9 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
   // Last `_videoFrameSeq` value that produced an inference, used by the
   // frame-skip gate. Init to -INF so the very first frame always runs.
   private _lastInferenceSeq = -1
+  // Number of camera frames to skip between inferences. Set by the benchmark
+  // at init time: 1 = 30fps segmenter (fast GPU), 2 = 15fps segmenter (mid GPU).
+  private _segmenterFrameSkip = 2
   // User-facing latency/halo controls. `latencyAuto` resolves the effective
   // mode each frame from the motion tracker; `latencyMode` is the manual
   // preset used otherwise. `maskPrediction` toggles the velocity-driven mask
@@ -406,7 +410,9 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     return SegmentationModel.AUTO
   }
 
-  private async _benchmarkSegmenter(seg: Segmenter): Promise<boolean> {
+  private async _benchmarkSegmenter(
+    seg: Segmenter
+  ): Promise<'landscape' | 'multiclass_skip1' | 'multiclass_skip2'> {
     try {
       const probe = await probeMediapipeDelegate()
       if (probe === 'CPU') {
@@ -420,103 +426,192 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
           '└────────────────────────────────────────────────────────────┘',
           'color: #f59e0b; font-weight: bold; font-family: monospace; font-size: 11px;'
         )
-        return false
+        return 'landscape'
       }
-      
+
       const width = seg.inputSize.width
       const height = seg.inputSize.height
-      
-      const dummyCanvas = document.createElement('canvas')
-      dummyCanvas.width = width
-      dummyCanvas.height = height
-      const ctx = dummyCanvas.getContext('2d')
-      if (!ctx) return false
-      const dummyData = ctx.createImageData(width, height)
-      
-      try {
-        await seg.segment(dummyData, performance.now())
-      } catch (warmupErr) {
-        console.warn(
-          '%c┌────────────────────────────────────────────────────────────┐\n' +
-          '│ [AMP BENCHMARK] WARM-UP FAILED                             │\n' +
-          '├────────────────────────────────────────────────────────────┤\n' +
-          '│  Warm-up run threw an exception.                           │\n' +
-          '│  Safe fallback to Landscape mode initiated.                │\n' +
-          '└────────────────────────────────────────────────────────────┘',
-          'color: #ef4444; font-weight: bold; font-family: monospace; font-size: 11px;'
-        )
-        return false
+
+      // Reusable canvas for capturing fresh video frames during the benchmark.
+      const benchCanvas = document.createElement('canvas')
+      benchCanvas.width = width
+      benchCanvas.height = height
+      const ctx = benchCanvas.getContext('2d')
+      if (!ctx) return 'landscape'
+
+      const hasRealFrame = (): boolean =>
+        !!(this.videoElement &&
+          this.videoElement.readyState >= 2 &&
+          this.videoElement.videoWidth > 0)
+
+      // Draw the current video frame onto benchCanvas and return its ImageData.
+      // The canvas pixels remain available for createImageBitmap after this call.
+      const captureFrame = (): ImageData => {
+        if (hasRealFrame()) {
+          ctx.drawImage(this.videoElement!, 0, 0, width, height)
+        }
+        return ctx.getImageData(0, 0, width, height)
       }
-      
-      const runs = 4
-      let totalTime = 0
-      for (let i = 0; i < runs; i++) {
-        if (this._destroyed) return false
+
+      // Publish mask + bitmap as _latestPair so the render loop displays the
+      // result of each benchmark inference immediately. The user sees the effect
+      // building up run by run (choppy but not a frozen passthrough).
+      const publishBenchmarkFrame = async (mask: Float32Array): Promise<void> => {
+        if (!hasRealFrame()) return
+        const now = performance.now()
+        let bitmap: ImageBitmap
+        try {
+          bitmap = await createImageBitmap(benchCanvas, { imageOrientation: 'flipY' })
+        } catch {
+          return
+        }
+        if (this._destroyed) {
+          bitmap.close()
+          return
+        }
+        const prev = this._latestPair
+        this._latestPair = {
+          mask,
+          source: bitmap,
+          captureTime: now,
+          cameraCaptureTime: now,
+          procW: width,
+          procH: height,
+        }
+        prev?.source.close()
+      }
+
+      // Warm-up: 5 runs discarded so the GPU JIT-compiles shaders and reaches
+      // steady-state frequency before the timed window starts.
+      // Each run uses a fresh frame and publishes its result so the user starts
+      // seeing the matting effect even before the measured phase begins.
+      const WARMUP = 5
+      for (let i = 0; i < WARMUP; i++) {
+        if (this._destroyed) return 'landscape'
+        try {
+          const frame = captureFrame()
+          const mask = await seg.segment(frame, performance.now())
+          await publishBenchmarkFrame(mask)
+        } catch {
+          console.warn(
+            '%c┌────────────────────────────────────────────────────────────┐\n' +
+            '│ [AMP BENCHMARK] WARM-UP FAILED                             │\n' +
+            '├────────────────────────────────────────────────────────────┤\n' +
+            '│  Warm-up run threw an exception.                           │\n' +
+            '│  Safe fallback to Landscape mode initiated.                │\n' +
+            '└────────────────────────────────────────────────────────────┘',
+            'color: #ef4444; font-weight: bold; font-family: monospace; font-size: 11px;'
+          )
+          return 'landscape'
+        }
+      }
+
+      // Measured runs: 15 samples on fresh frames. Frame capture (drawImage +
+      // getImageData) and bitmap creation are done OUTSIDE the timer so only
+      // inference time is measured. Each result is published for display.
+      const RUNS = 15
+      const samples: number[] = []
+      for (let i = 0; i < RUNS; i++) {
+        if (this._destroyed) return 'landscape'
+        const frame = captureFrame()                 // outside the timed window
         const start = performance.now()
-        await seg.segment(dummyData, performance.now())
-        totalTime += performance.now() - start
+        const mask = await seg.segment(frame, performance.now())
+        samples.push(performance.now() - start)
+        await publishBenchmarkFrame(mask)            // display, outside the timer
       }
-      
-      const avg = totalTime / runs
-      const success = avg <= 30
+
+      samples.sort((a, b) => a - b)
+      const p75 = samples[Math.floor(RUNS * 0.75)]  // index 11 of 15
+
+      // Three-tier decision based on 30fps camera budget (33.3ms/frame).
+      // Using p75 rather than mean: 75% of real inferences will be at or below
+      // this latency, providing a realistic-yet-conservative baseline.
+      //   < 25ms  → Multiclass SKIP=1 (30fps segmenter, ~8ms GPU margin/frame)
+      //   25–50ms → Multiclass SKIP=2 (15fps, comfortable margin in 66.7ms window)
+      //   > 50ms  → Landscape fallback
+      let result: 'landscape' | 'multiclass_skip1' | 'multiclass_skip2'
+      let resultVal: string
+      let resultColor: string
+      if (p75 < 25) {
+        result = 'multiclass_skip1'
+        resultVal = 'PASS — Multiclass 30fps (skip=1)'
+        resultColor = 'color: #10b981; font-weight: bold; font-family: monospace; font-size: 11px;'
+      } else if (p75 <= 50) {
+        result = 'multiclass_skip2'
+        resultVal = 'PASS — Multiclass 15fps (skip=2)'
+        resultColor = 'color: #f59e0b; font-weight: bold; font-family: monospace; font-size: 11px;'
+      } else {
+        result = 'landscape'
+        resultVal = 'FAIL — Landscape fallback'
+        resultColor = 'color: #ef4444; font-weight: bold; font-family: monospace; font-size: 11px;'
+      }
 
       const widthCard = 60
       const padRight = (str: string, len: number) => str + ' '.repeat(Math.max(0, len - str.length))
-      
-      const titleLine = padRight(`  [AMP BENCHMARK] MULTICLASS PERFORMANCE`, widthCard)
-      const latencyLabel = `  Average Inference Latency: `
-      const latencyVal = `${avg.toFixed(2)} ms`
-      const latencyPadding = ' '.repeat(Math.max(0, widthCard - latencyLabel.length - latencyVal.length))
-      
-      const thresholdLine = padRight(`  Target Threshold:          30.00 ms`, widthCard)
-      const delegateLine = padRight(`  Device WebGL Delegate:     GPU`, widthCard)
-      const resultLabel = `  Evaluation Result:         `
-      const resultVal = success ? 'PASS (Use Multiclass)' : 'FAIL (Fallback to Landscape)'
-      const resultPadding = ' '.repeat(Math.max(0, widthCard - resultLabel.length - resultVal.length))
+
+      const titleLine    = padRight(`  [AMP BENCHMARK] MULTICLASS PERFORMANCE`, widthCard)
+      const inputLabel   = `  Input:                     `
+      const inputVal     = hasRealFrame() ? 'real video frame' : 'dummy (no video yet)'
+      const inputPad     = ' '.repeat(Math.max(0, widthCard - inputLabel.length - inputVal.length))
+      const p75Label     = `  P75 Inference Latency:     `
+      const p75Val       = `${p75.toFixed(2)} ms`
+      const p75Pad       = ' '.repeat(Math.max(0, widthCard - p75Label.length - p75Val.length))
+      const runsLine     = padRight(`  Protocol: ${WARMUP} warm-up + ${RUNS} timed runs`, widthCard)
+      const tier1Line    = padRight(`  Tier 1 (skip=1, 30fps):   < 25.00 ms`, widthCard)
+      const tier2Line    = padRight(`  Tier 2 (skip=2, 15fps):  25–50.00 ms`, widthCard)
+      const tier3Line    = padRight(`  Tier 3 (Landscape):        > 50.00 ms`, widthCard)
+      const resultLabel  = `  Evaluation Result:         `
+      const resultPad    = ' '.repeat(Math.max(0, widthCard - resultLabel.length - resultVal.length))
 
       console.log(
         `%c┌────────────────────────────────────────────────────────────┐\n` +
         `%c│%c${titleLine}%c│\n` +
         `%c├────────────────────────────────────────────────────────────┤\n` +
-        `%c│%c${latencyLabel}%c${latencyVal}%c${latencyPadding}│\n` +
-        `%c│%c${thresholdLine}%c│\n` +
-        `%c│%c${delegateLine}%c│\n` +
+        `%c│%c${inputLabel}%c${inputVal}%c${inputPad}│\n` +
+        `%c│%c${runsLine}%c│\n` +
+        `%c│%c${p75Label}%c${p75Val}%c${p75Pad}│\n` +
         `%c├────────────────────────────────────────────────────────────┤\n` +
-        `%c│%c${resultLabel}%c${resultVal}%c${resultPadding}│\n` +
+        `%c│%c${tier1Line}%c│\n` +
+        `%c│%c${tier2Line}%c│\n` +
+        `%c│%c${tier3Line}%c│\n` +
+        `%c├────────────────────────────────────────────────────────────┤\n` +
+        `%c│%c${resultLabel}%c${resultVal}%c${resultPad}│\n` +
         `%c└────────────────────────────────────────────────────────────┘`,
-        // Line 1: top border
-        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',
-        // Line 2: start, title, end
-        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',
-        'color: #60a5fa; font-weight: bold; font-family: monospace; font-size: 11px;',
-        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',
-        // Line 3: middle border
-        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',
-        // Line 4: start, latency label, latency val, end
-        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',
-        'color: #e2e8f0; font-family: monospace; font-size: 11px;',
-        'color: #f59e0b; font-weight: bold; font-family: monospace; font-size: 11px;',
-        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',
-        // Line 5: start, threshold, end
-        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',
-        'color: #e2e8f0; font-family: monospace; font-size: 11px;',
-        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',
-        // Line 6: start, delegate, end
-        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',
-        'color: #e2e8f0; font-family: monospace; font-size: 11px;',
-        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',
-        // Line 7: middle border
-        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',
-        // Line 8: start, result label, result val, end
-        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',
-        'color: #e2e8f0; font-family: monospace; font-size: 11px;',
-        success ? 'color: #10b981; font-weight: bold; font-family: monospace; font-size: 11px;' : 'color: #ef4444; font-weight: bold; font-family: monospace; font-size: 11px;',
-        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',
-        // Line 9: bottom border
-        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;'
+        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',  // top border
+        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',  // │
+        'color: #60a5fa; font-weight: bold; font-family: monospace; font-size: 11px;',  // title
+        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',  // │
+        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',  // ├
+        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',  // │
+        'color: #e2e8f0; font-family: monospace; font-size: 11px;',                     // input label
+        'color: #a78bfa; font-weight: bold; font-family: monospace; font-size: 11px;',  // input val
+        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',  // │
+        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',  // │
+        'color: #e2e8f0; font-family: monospace; font-size: 11px;',                     // runs line
+        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',  // │
+        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',  // │
+        'color: #e2e8f0; font-family: monospace; font-size: 11px;',                     // p75 label
+        'color: #f59e0b; font-weight: bold; font-family: monospace; font-size: 11px;',  // p75 val
+        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',  // │
+        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',  // ├
+        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',  // │
+        'color: #e2e8f0; font-family: monospace; font-size: 11px;',                     // tier1
+        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',  // │
+        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',  // │
+        'color: #e2e8f0; font-family: monospace; font-size: 11px;',                     // tier2
+        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',  // │
+        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',  // │
+        'color: #e2e8f0; font-family: monospace; font-size: 11px;',                     // tier3
+        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',  // │
+        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',  // ├
+        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',  // │
+        'color: #e2e8f0; font-family: monospace; font-size: 11px;',                     // result label
+        resultColor,                                                                      // result val
+        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',  // │
+        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;'   // bottom border
       )
 
-      return success
+      return result
     } catch (e) {
       console.warn(
         '%c┌────────────────────────────────────────────────────────────┐\n' +
@@ -527,7 +622,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
         '└────────────────────────────────────────────────────────────┘',
         'color: #ef4444; font-weight: bold; font-family: monospace; font-size: 11px;'
       )
-      return false
+      return 'landscape'
     }
   }
 
@@ -616,13 +711,17 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
         return
       }
 
-      if (model === SegmentationModel.AUTO) {
-        const isFastEnough = await this._benchmarkSegmenter(seg)
+      // Benchmark whenever Multiclass is the candidate (AUTO or explicit).
+      // AUTO: 'landscape' result triggers a real fallback to Landscape.
+      // Explicit MULTICLASS: 'landscape' result is ignored (user chose explicitly)
+      //   but skip is still set to 2 as the conservative safe value.
+      if (targetModel === SegmentationModel.MULTICLASS) {
+        const benchResult = await this._benchmarkSegmenter(seg)
         if (this._destroyed || this._pendingModel !== model) {
           seg.destroy()
           return
         }
-        if (!isFastEnough) {
+        if (benchResult === 'landscape' && model === SegmentationModel.AUTO) {
           seg.destroy()
           targetModel = SegmentationModel.LANDSCAPE
           seg = createSegmenter(targetModel)
@@ -631,6 +730,8 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
             seg.destroy()
             return
           }
+        } else {
+          this._segmenterFrameSkip = benchResult === 'multiclass_skip1' ? 1 : 2
         }
       }
 
@@ -642,6 +743,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       this.segmenter = seg
       this.currentModel = targetModel
       setMattingStatsModel(model, targetModel)
+      setSegmenterFrameSkip(this._segmenterFrameSkip)
       this.processingWidth = seg.inputSize.width
       this.processingHeight = seg.inputSize.height
       this._resizeMaskIfNeeded()
@@ -676,13 +778,13 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
         return
       }
 
-      if (model === SegmentationModel.AUTO) {
-        const isFastEnough = await this._benchmarkSegmenter(seg)
+      if (targetModel === SegmentationModel.MULTICLASS) {
+        const benchResult = await this._benchmarkSegmenter(seg)
         if (this._destroyed || this._pendingModel !== model) {
           seg.destroy()
           return
         }
-        if (!isFastEnough) {
+        if (benchResult === 'landscape' && model === SegmentationModel.AUTO) {
           seg.destroy()
           targetModel = SegmentationModel.LANDSCAPE
           seg = createSegmenter(targetModel)
@@ -691,6 +793,8 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
             seg.destroy()
             return
           }
+        } else {
+          this._segmenterFrameSkip = benchResult === 'multiclass_skip1' ? 1 : 2
         }
       }
 
@@ -703,6 +807,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       this.segmenter = seg
       this.currentModel = targetModel
       setMattingStatsModel(model, targetModel)
+      setSegmenterFrameSkip(this._segmenterFrameSkip)
       this.processingWidth = seg.inputSize.width
       this.processingHeight = seg.inputSize.height
       old?.destroy()
@@ -889,16 +994,15 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
    */
   private async _runSegmenterLoop(): Promise<void> {
     const FALLBACK_MS = 1000 / 60
-    const SKIP = AdvancedMattingProcessor.SEGMENTER_FRAME_SKIP
     while (this._segLoopActive && !this._destroyed) {
       const hasRvfc = this._rvfcHandle !== null
       // Gate: wake on real camera frame (rVFC) or timer (fallback).
       if (hasRvfc) {
         await this._waitNextVideoFrame()
         if (!this._segLoopActive || this._destroyed) return
-        // Frame skip: only run inference once every SKIP camera frames.
+        // Frame skip: only run inference once every _segmenterFrameSkip camera frames.
         const seq = this._videoFrameSeq
-        if (seq - this._lastInferenceSeq < SKIP) continue
+        if (seq - this._lastInferenceSeq < this._segmenterFrameSkip) continue
         this._lastInferenceSeq = seq
       }
       const t0 = performance.now()
@@ -1003,12 +1107,6 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       }
     }
   }
-
-  // Run inference once every N camera frames. N=2 with a 30fps camera yields
-  // a ~15fps mask, which the temporal EMA + MaskMotionTracker compensate for,
-  // while halving GPU contention on the camera capture path. Empirically the
-  // camera FPS rises from ~19 to ~26-28 with this setting.
-  private static readonly SEGMENTER_FRAME_SKIP = 2
 
   // Slightly below 60fps so floating-point jitter in rAF timestamps doesn't
   // cause every-other-frame skipping (threshold == rAF interval → ~30fps).

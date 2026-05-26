@@ -183,6 +183,13 @@ const MattingDiagnostics = () => {
         <Text variant="sm">
           {t('effects.stats.activeModel', 'Active model')} :{' '}
           <strong>{modelLabel(stats.currentModel)}</strong>
+          {stats.currentModel === SegmentationModel.MULTICLASS && (
+            <span className={css({ color: 'greyscale.500' })}>
+              {' '}· skip={stats.segmenterFrameSkip} ({stats.segmenterFrameSkip === 1
+                ? t('effects.stats.skip1Label', '30 fps')
+                : t('effects.stats.skip2Label', '15 fps')})
+            </span>
+          )}
         </Text>
       )}
       <Text variant="sm">
@@ -199,6 +206,13 @@ const MattingDiagnostics = () => {
       <Text variant="sm">
         {t('effects.stats.inference', 'Segmenter inference')} :{' '}
         <strong>{stats.segmenterInferenceMs.toFixed(1)} ms</strong>
+        {' '}
+        <span className={css({ color: 'greyscale.500' })}>
+          ({t('effects.stats.frameSkip', 'skip={{n}} → {{fps}} fps', {
+            n: stats.segmenterFrameSkip,
+            fps: stats.segmenterFps.toFixed(0),
+          })})
+        </span>
       </Text>
       <Text variant="sm">
         {t('effects.stats.fps', 'FPS')} :{' '}
