@@ -82,15 +82,15 @@ export function stabilizeBbox(current: BBox, next: BBox): BBox {
   }
 }
 
-/** Bilinear resize of a Float32 single-channel image. */
-function resizeFloat32(
+/** Bilinear resize of a Float32 single-channel image into a pre-allocated destination. */
+function resizeFloat32Into(
   src: Float32Array,
   srcW: number,
   srcH: number,
+  dst: Float32Array,
   dstW: number,
   dstH: number
-): Float32Array {
-  const dst = new Float32Array(dstW * dstH)
+): void {
   const scaleX = srcW / dstW
   const scaleY = srcH / dstH
 
@@ -115,7 +115,6 @@ function resizeFloat32(
       dst[dy * dstW + dx] = v
     }
   }
-  return dst
 }
 
 /**
@@ -133,6 +132,10 @@ export class RoiCropper {
   private frameCounter = 0
   private prevLuma: Uint8Array | null = null
   private cooldownFrames = 0
+
+  // Reusable buffers — avoids per-frame Float32Array allocations in remapMask/resizeFloat32.
+  private _resizeBuf: Float32Array | null = null
+  private _fullBuf: Float32Array | null = null
 
   /** Returns the stabilised bbox to use when extracting the model input for this frame. */
   getNextCropBbox(
@@ -218,7 +221,12 @@ export class RoiCropper {
     fullW: number,
     fullH: number
   ): Float32Array {
-    const full = new Float32Array(fullW * fullH)
+    const fullLen = fullW * fullH
+    if (!this._fullBuf || this._fullBuf.length !== fullLen) {
+      this._fullBuf = new Float32Array(fullLen)
+    }
+    const full = this._fullBuf
+    full.fill(0)
 
     const dstX = Math.round(usedBbox.x * fullW)
     const dstY = Math.round(usedBbox.y * fullH)
@@ -227,7 +235,11 @@ export class RoiCropper {
 
     if (dstW <= 0 || dstH <= 0) return full
 
-    const resized = resizeFloat32(cropMask, cropMaskW, cropMaskH, dstW, dstH)
+    const resizeLen = dstW * dstH
+    if (!this._resizeBuf || this._resizeBuf.length !== resizeLen) {
+      this._resizeBuf = new Float32Array(resizeLen)
+    }
+    resizeFloat32Into(cropMask, cropMaskW, cropMaskH, this._resizeBuf, dstW, dstH)
 
     for (let y = 0; y < dstH; y++) {
       const fy = dstY + y
@@ -235,7 +247,7 @@ export class RoiCropper {
       for (let x = 0; x < dstW; x++) {
         const fx = dstX + x
         if (fx < 0 || fx >= fullW) continue
-        full[fy * fullW + fx] = resized[y * dstW + x]
+        full[fy * fullW + fx] = this._resizeBuf[y * dstW + x]
       }
     }
 
@@ -259,6 +271,8 @@ export class RoiCropper {
     this.frameCounter = 0
     this.prevLuma = null
     this.cooldownFrames = 0
+    this._resizeBuf = null
+    this._fullBuf = null
   }
 
   getCurrentBbox(): BBox {

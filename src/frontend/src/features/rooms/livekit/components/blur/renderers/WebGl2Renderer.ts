@@ -101,6 +101,26 @@ export class WebGl2Renderer implements GpuRenderer {
   private virtualImgPending: HTMLImageElement | null = null
   private virtualImgUploaded = false
 
+  // Reusable CPU buffer for Float32→Uint8 mask conversion (avoids per-frame allocation).
+  private u8MaskBuffer?: Uint8Array
+
+  // Cached uniform locations — resolved once in _buildPrograms(), reused every frame.
+  // Eliminates ~43 string-lookup driver calls per frame.
+  private uLoc!: {
+    sigmoid:    { uTex: WebGLUniformLocation | null; uSteepness: WebGLUniformLocation | null; uThreshold: WebGLUniformLocation | null }
+    ema:        { uTex: WebGLUniformLocation | null; uPrev: WebGLUniformLocation | null; uAlpha: WebGLUniformLocation | null }
+    copyR:      { uTex: WebGLUniformLocation | null }
+    morphology: { uTex: WebGLUniformLocation | null; uRadius: WebGLUniformLocation | null; uTexel: WebGLUniformLocation | null }
+    maskedDown: { uFrame: WebGLUniformLocation | null; uMask: WebGLUniformLocation | null; uSourceTexelSize: WebGLUniformLocation | null }
+    blur:       { uImage: WebGLUniformLocation | null; uMask: WebGLUniformLocation | null; uDirection: WebGLUniformLocation | null; uTexelSize: WebGLUniformLocation | null; uRadius: WebGLUniformLocation | null }
+    composite:  { uVideo: WebGLUniformLocation | null; uBg: WebGLUniformLocation | null; uMask: WebGLUniformLocation | null; uErosionRadius: WebGLUniformLocation | null; uOutTexel: WebGLUniformLocation | null }
+    segmo:      { uVideo: WebGLUniformLocation | null; uBg: WebGLUniformLocation | null; uMask: WebGLUniformLocation | null; uOutTexel: WebGLUniformLocation | null }
+    feather:    { uMask: WebGLUniformLocation | null; uTexel: WebGLUniformLocation | null; uRadius: WebGLUniformLocation | null }
+    lightWrap:  { uComposite: WebGLUniformLocation | null; uBg: WebGLUniformLocation | null; uMask: WebGLUniformLocation | null; uStrength: WebGLUniformLocation | null }
+    maskedFg:   { uVideo: WebGLUniformLocation | null; uMask: WebGLUniformLocation | null }
+    fgCast:     { uVideo: WebGLUniformLocation | null; uFgMasked: WebGLUniformLocation | null; uBg: WebGLUniformLocation | null; uStrength: WebGLUniformLocation | null }
+  }
+
   async init(canvas: HTMLCanvasElement, opts: GpuRendererInitOpts) {
     const gl = canvas.getContext('webgl2', {
       alpha: false,
@@ -264,11 +284,15 @@ export class WebGl2Renderer implements GpuRenderer {
     if (w !== this.procW || h !== this.procH) {
       this.resizeProcessing(w, h)
     }
-    // Convert Float32 [0,1] → Uint8.
-    const u8 = new Uint8Array(mask.length)
-    for (let i = 0; i < mask.length; i++) {
+    // Convert Float32 [0,1] → Uint8, reusing a pre-allocated buffer.
+    const len = mask.length
+    if (!this.u8MaskBuffer || this.u8MaskBuffer.length !== len) {
+      this.u8MaskBuffer = new Uint8Array(len)
+    }
+    const u8 = this.u8MaskBuffer
+    for (let i = 0; i < len; i++) {
       const v = mask[i]
-      u8[i] = v <= 0 ? 0 : v >= 1 ? 255 : Math.round(v * 255)
+      u8[i] = v <= 0 ? 0 : v >= 1 ? 255 : (v * 255 + 0.5) | 0
     }
     const gl = this.gl
     gl.bindTexture(gl.TEXTURE_2D, this.rawMaskTex)
@@ -382,19 +406,19 @@ export class WebGl2Renderer implements GpuRenderer {
     gl.useProgram(this.pComposite)
     gl.activeTexture(gl.TEXTURE0)
     gl.bindTexture(gl.TEXTURE_2D, this.videoTex)
-    gl.uniform1i(gl.getUniformLocation(this.pComposite, 'uVideo'), 0)
+    gl.uniform1i(this.uLoc.composite.uVideo, 0)
     gl.activeTexture(gl.TEXTURE1)
     gl.bindTexture(gl.TEXTURE_2D, bgTex)
-    gl.uniform1i(gl.getUniformLocation(this.pComposite, 'uBg'), 1)
+    gl.uniform1i(this.uLoc.composite.uBg, 1)
     gl.activeTexture(gl.TEXTURE2)
     gl.bindTexture(gl.TEXTURE_2D, finalMaskTex)
-    gl.uniform1i(gl.getUniformLocation(this.pComposite, 'uMask'), 2)
+    gl.uniform1i(this.uLoc.composite.uMask, 2)
     gl.uniform1f(
-      gl.getUniformLocation(this.pComposite, 'uErosionRadius'),
+      this.uLoc.composite.uErosionRadius,
       this.postCfg.erosion?.pixels ?? 0
     )
     gl.uniform2f(
-      gl.getUniformLocation(this.pComposite, 'uOutTexel'),
+      this.uLoc.composite.uOutTexel,
       1 / this.outW,
       1 / this.outH
     )
@@ -516,15 +540,9 @@ export class WebGl2Renderer implements GpuRenderer {
       gl.useProgram(this.pSigmoid)
       gl.activeTexture(gl.TEXTURE0)
       gl.bindTexture(gl.TEXTURE_2D, src)
-      gl.uniform1i(gl.getUniformLocation(this.pSigmoid, 'uTex'), 0)
-      gl.uniform1f(
-        gl.getUniformLocation(this.pSigmoid, 'uSteepness'),
-        this.postCfg.sigmoid.steepness
-      )
-      gl.uniform1f(
-        gl.getUniformLocation(this.pSigmoid, 'uThreshold'),
-        this.postCfg.sigmoid.threshold
-      )
+      gl.uniform1i(this.uLoc.sigmoid.uTex, 0)
+      gl.uniform1f(this.uLoc.sigmoid.uSteepness, this.postCfg.sigmoid.steepness)
+      gl.uniform1f(this.uLoc.sigmoid.uThreshold, this.postCfg.sigmoid.threshold)
       this._drawQuad()
       advance()
     }
@@ -546,14 +564,11 @@ export class WebGl2Renderer implements GpuRenderer {
       gl.useProgram(this.pEma)
       gl.activeTexture(gl.TEXTURE0)
       gl.bindTexture(gl.TEXTURE_2D, src)
-      gl.uniform1i(gl.getUniformLocation(this.pEma, 'uTex'), 0)
+      gl.uniform1i(this.uLoc.ema.uTex, 0)
       gl.activeTexture(gl.TEXTURE1)
       gl.bindTexture(gl.TEXTURE_2D, this.emaTex)
-      gl.uniform1i(gl.getUniformLocation(this.pEma, 'uPrev'), 1)
-      gl.uniform1f(
-        gl.getUniformLocation(this.pEma, 'uAlpha'),
-        this.hasEmaState ? alpha : 1.0
-      )
+      gl.uniform1i(this.uLoc.ema.uPrev, 1)
+      gl.uniform1f(this.uLoc.ema.uAlpha, this.hasEmaState ? alpha : 1.0)
       this._drawQuad()
       advance()
       // Copy current result into emaTex for next frame
@@ -561,7 +576,7 @@ export class WebGl2Renderer implements GpuRenderer {
       gl.useProgram(this.pCopyR)
       gl.activeTexture(gl.TEXTURE0)
       gl.bindTexture(gl.TEXTURE_2D, src)
-      gl.uniform1i(gl.getUniformLocation(this.pCopyR, 'uTex'), 0)
+      gl.uniform1i(this.uLoc.copyR.uTex, 0)
       this._drawQuad()
       this.hasEmaState = true
     }
@@ -575,13 +590,9 @@ export class WebGl2Renderer implements GpuRenderer {
     gl.useProgram(this.pMorphology)
     gl.activeTexture(gl.TEXTURE0)
     gl.bindTexture(gl.TEXTURE_2D, src)
-    gl.uniform1i(gl.getUniformLocation(this.pMorphology, 'uTex'), 0)
-    gl.uniform1f(gl.getUniformLocation(this.pMorphology, 'uRadius'), radius)
-    gl.uniform2f(
-      gl.getUniformLocation(this.pMorphology, 'uTexel'),
-      1 / this.procW,
-      1 / this.procH
-    )
+    gl.uniform1i(this.uLoc.morphology.uTex, 0)
+    gl.uniform1f(this.uLoc.morphology.uRadius, radius)
+    gl.uniform2f(this.uLoc.morphology.uTexel, 1 / this.procW, 1 / this.procH)
     this._drawQuad()
   }
 
@@ -645,15 +656,11 @@ export class WebGl2Renderer implements GpuRenderer {
     gl.useProgram(this.pMaskedDownsample)
     gl.activeTexture(gl.TEXTURE0)
     gl.bindTexture(gl.TEXTURE_2D, this.videoTex)
-    gl.uniform1i(gl.getUniformLocation(this.pMaskedDownsample, 'uFrame'), 0)
+    gl.uniform1i(this.uLoc.maskedDown.uFrame, 0)
     gl.activeTexture(gl.TEXTURE1)
     gl.bindTexture(gl.TEXTURE_2D, maskTex)
-    gl.uniform1i(gl.getUniformLocation(this.pMaskedDownsample, 'uMask'), 1)
-    gl.uniform2f(
-      gl.getUniformLocation(this.pMaskedDownsample, 'uSourceTexelSize'),
-      1.0 / this.outW,
-      1.0 / this.outH
-    )
+    gl.uniform1i(this.uLoc.maskedDown.uMask, 1)
+    gl.uniform2f(this.uLoc.maskedDown.uSourceTexelSize, 1.0 / this.outW, 1.0 / this.outH)
     this._drawQuad()
 
     // Stage 2: horizontal mask-weighted gaussian.
@@ -661,13 +668,13 @@ export class WebGl2Renderer implements GpuRenderer {
     gl.useProgram(this.pMaskWeightedBlur)
     gl.activeTexture(gl.TEXTURE0)
     gl.bindTexture(gl.TEXTURE_2D, this.bgDownTex)
-    gl.uniform1i(gl.getUniformLocation(this.pMaskWeightedBlur, 'uImage'), 0)
+    gl.uniform1i(this.uLoc.blur.uImage, 0)
     gl.activeTexture(gl.TEXTURE1)
     gl.bindTexture(gl.TEXTURE_2D, maskTex)
-    gl.uniform1i(gl.getUniformLocation(this.pMaskWeightedBlur, 'uMask'), 1)
-    gl.uniform2f(gl.getUniformLocation(this.pMaskWeightedBlur, 'uDirection'), 1.0, 0.0)
-    gl.uniform2f(gl.getUniformLocation(this.pMaskWeightedBlur, 'uTexelSize'), 1.0 / this.halfW, 1.0 / this.halfH)
-    gl.uniform1f(gl.getUniformLocation(this.pMaskWeightedBlur, 'uRadius'), radius)
+    gl.uniform1i(this.uLoc.blur.uMask, 1)
+    gl.uniform2f(this.uLoc.blur.uDirection, 1.0, 0.0)
+    gl.uniform2f(this.uLoc.blur.uTexelSize, 1.0 / this.halfW, 1.0 / this.halfH)
+    gl.uniform1f(this.uLoc.blur.uRadius, radius)
     this._drawQuad()
 
     // Stage 3: vertical mask-weighted gaussian.
@@ -675,13 +682,13 @@ export class WebGl2Renderer implements GpuRenderer {
     gl.useProgram(this.pMaskWeightedBlur)
     gl.activeTexture(gl.TEXTURE0)
     gl.bindTexture(gl.TEXTURE_2D, this.bgBlurPingTex)
-    gl.uniform1i(gl.getUniformLocation(this.pMaskWeightedBlur, 'uImage'), 0)
+    gl.uniform1i(this.uLoc.blur.uImage, 0)
     gl.activeTexture(gl.TEXTURE1)
     gl.bindTexture(gl.TEXTURE_2D, maskTex)
-    gl.uniform1i(gl.getUniformLocation(this.pMaskWeightedBlur, 'uMask'), 1)
-    gl.uniform2f(gl.getUniformLocation(this.pMaskWeightedBlur, 'uDirection'), 0.0, 1.0)
-    gl.uniform2f(gl.getUniformLocation(this.pMaskWeightedBlur, 'uTexelSize'), 1.0 / this.halfW, 1.0 / this.halfH)
-    gl.uniform1f(gl.getUniformLocation(this.pMaskWeightedBlur, 'uRadius'), radius)
+    gl.uniform1i(this.uLoc.blur.uMask, 1)
+    gl.uniform2f(this.uLoc.blur.uDirection, 0.0, 1.0)
+    gl.uniform2f(this.uLoc.blur.uTexelSize, 1.0 / this.halfW, 1.0 / this.halfH)
+    gl.uniform1f(this.uLoc.blur.uRadius, radius)
     this._drawQuad()
 
     return this.bgBlurPongTex
@@ -822,16 +829,9 @@ export class WebGl2Renderer implements GpuRenderer {
     gl.useProgram(this.pSegmoEdgeFeather)
     gl.activeTexture(gl.TEXTURE0)
     gl.bindTexture(gl.TEXTURE_2D, maskTex)
-    gl.uniform1i(gl.getUniformLocation(this.pSegmoEdgeFeather, 'uMask'), 0)
-    gl.uniform2f(
-      gl.getUniformLocation(this.pSegmoEdgeFeather, 'uTexel'),
-      1 / this.outW,
-      1 / this.outH
-    )
-    gl.uniform1f(
-      gl.getUniformLocation(this.pSegmoEdgeFeather, 'uRadius'),
-      this.segmoFeatherRadius
-    )
+    gl.uniform1i(this.uLoc.feather.uMask, 0)
+    gl.uniform2f(this.uLoc.feather.uTexel, 1 / this.outW, 1 / this.outH)
+    gl.uniform1f(this.uLoc.feather.uRadius, this.segmoFeatherRadius)
     this._drawQuad()
 
     // Passes T1+T2 (foreground color cast — pure GPU via mipmaps). Skipped when
@@ -862,10 +862,10 @@ export class WebGl2Renderer implements GpuRenderer {
         gl.useProgram(this.pMaskedFg)
         gl.activeTexture(gl.TEXTURE0)
         gl.bindTexture(gl.TEXTURE_2D, this.videoTex)
-        gl.uniform1i(gl.getUniformLocation(this.pMaskedFg, 'uVideo'), 0)
+        gl.uniform1i(this.uLoc.maskedFg.uVideo, 0)
         gl.activeTexture(gl.TEXTURE1)
         gl.bindTexture(gl.TEXTURE_2D, this.segmoFeatheredMaskTex!)
-        gl.uniform1i(gl.getUniformLocation(this.pMaskedFg, 'uMask'), 1)
+        gl.uniform1i(this.uLoc.maskedFg.uMask, 1)
         this._drawQuad()
         // Build the mip pyramid so textureLod can fetch the global mean.
         gl.bindTexture(gl.TEXTURE_2D, this.maskedFgTex!)
@@ -878,17 +878,14 @@ export class WebGl2Renderer implements GpuRenderer {
         gl.useProgram(this.pFgColorCast)
         gl.activeTexture(gl.TEXTURE0)
         gl.bindTexture(gl.TEXTURE_2D, this.videoTex)
-        gl.uniform1i(gl.getUniformLocation(this.pFgColorCast, 'uVideo'), 0)
+        gl.uniform1i(this.uLoc.fgCast.uVideo, 0)
         gl.activeTexture(gl.TEXTURE1)
         gl.bindTexture(gl.TEXTURE_2D, this.maskedFgTex!)
-        gl.uniform1i(gl.getUniformLocation(this.pFgColorCast, 'uFgMasked'), 1)
+        gl.uniform1i(this.uLoc.fgCast.uFgMasked, 1)
         gl.activeTexture(gl.TEXTURE2)
         gl.bindTexture(gl.TEXTURE_2D, bgTex)
-        gl.uniform1i(gl.getUniformLocation(this.pFgColorCast, 'uBg'), 2)
-        gl.uniform1f(
-          gl.getUniformLocation(this.pFgColorCast, 'uStrength'),
-          this.segmoForegroundTintStrength
-        )
+        gl.uniform1i(this.uLoc.fgCast.uBg, 2)
+        gl.uniform1f(this.uLoc.fgCast.uStrength, this.segmoForegroundTintStrength)
         this._drawQuad()
         videoSrc = this.tintedVideoTex!
       }
@@ -907,18 +904,14 @@ export class WebGl2Renderer implements GpuRenderer {
     gl.useProgram(this.pCompositeSegmo)
     gl.activeTexture(gl.TEXTURE0)
     gl.bindTexture(gl.TEXTURE_2D, videoSrc)
-    gl.uniform1i(gl.getUniformLocation(this.pCompositeSegmo, 'uVideo'), 0)
+    gl.uniform1i(this.uLoc.segmo.uVideo, 0)
     gl.activeTexture(gl.TEXTURE1)
     gl.bindTexture(gl.TEXTURE_2D, bgTex)
-    gl.uniform1i(gl.getUniformLocation(this.pCompositeSegmo, 'uBg'), 1)
+    gl.uniform1i(this.uLoc.segmo.uBg, 1)
     gl.activeTexture(gl.TEXTURE2)
     gl.bindTexture(gl.TEXTURE_2D, this.segmoFeatheredMaskTex!)
-    gl.uniform1i(gl.getUniformLocation(this.pCompositeSegmo, 'uMask'), 2)
-    gl.uniform2f(
-      gl.getUniformLocation(this.pCompositeSegmo, 'uOutTexel'),
-      1 / this.outW,
-      1 / this.outH
-    )
+    gl.uniform1i(this.uLoc.segmo.uMask, 2)
+    gl.uniform2f(this.uLoc.segmo.uOutTexel, 1 / this.outW, 1 / this.outH)
     this._drawQuad()
 
     if (!useLightWrap) return
@@ -930,17 +923,14 @@ export class WebGl2Renderer implements GpuRenderer {
     gl.useProgram(this.pLightWrap)
     gl.activeTexture(gl.TEXTURE0)
     gl.bindTexture(gl.TEXTURE_2D, this.segmoCompositeTex!)
-    gl.uniform1i(gl.getUniformLocation(this.pLightWrap, 'uComposite'), 0)
+    gl.uniform1i(this.uLoc.lightWrap.uComposite, 0)
     gl.activeTexture(gl.TEXTURE1)
     gl.bindTexture(gl.TEXTURE_2D, bgTex)
-    gl.uniform1i(gl.getUniformLocation(this.pLightWrap, 'uBg'), 1)
+    gl.uniform1i(this.uLoc.lightWrap.uBg, 1)
     gl.activeTexture(gl.TEXTURE2)
     gl.bindTexture(gl.TEXTURE_2D, this.segmoFeatheredMaskTex!)
-    gl.uniform1i(gl.getUniformLocation(this.pLightWrap, 'uMask'), 2)
-    gl.uniform1f(
-      gl.getUniformLocation(this.pLightWrap, 'uStrength'),
-      this.segmoLightWrapStrength
-    )
+    gl.uniform1i(this.uLoc.lightWrap.uMask, 2)
+    gl.uniform1f(this.uLoc.lightWrap.uStrength, this.segmoLightWrapStrength)
     this._drawQuad()
   }
 
@@ -1492,5 +1482,23 @@ void main() {
   fragColor = vec4(tinted, 1.0);
 }`
     this.pFgColorCast = this._link(VS, FS_FG_COLOR_CAST)
+
+    // Cache all uniform locations once — avoids per-frame string lookups
+    // through the GL driver which can stall the CPU-GPU pipeline.
+    const loc = (p: WebGLProgram, n: string) => this.gl.getUniformLocation(p, n)
+    this.uLoc = {
+      sigmoid:    { uTex: loc(this.pSigmoid, 'uTex'), uSteepness: loc(this.pSigmoid, 'uSteepness'), uThreshold: loc(this.pSigmoid, 'uThreshold') },
+      ema:        { uTex: loc(this.pEma, 'uTex'), uPrev: loc(this.pEma, 'uPrev'), uAlpha: loc(this.pEma, 'uAlpha') },
+      copyR:      { uTex: loc(this.pCopyR, 'uTex') },
+      morphology: { uTex: loc(this.pMorphology, 'uTex'), uRadius: loc(this.pMorphology, 'uRadius'), uTexel: loc(this.pMorphology, 'uTexel') },
+      maskedDown: { uFrame: loc(this.pMaskedDownsample, 'uFrame'), uMask: loc(this.pMaskedDownsample, 'uMask'), uSourceTexelSize: loc(this.pMaskedDownsample, 'uSourceTexelSize') },
+      blur:       { uImage: loc(this.pMaskWeightedBlur, 'uImage'), uMask: loc(this.pMaskWeightedBlur, 'uMask'), uDirection: loc(this.pMaskWeightedBlur, 'uDirection'), uTexelSize: loc(this.pMaskWeightedBlur, 'uTexelSize'), uRadius: loc(this.pMaskWeightedBlur, 'uRadius') },
+      composite:  { uVideo: loc(this.pComposite, 'uVideo'), uBg: loc(this.pComposite, 'uBg'), uMask: loc(this.pComposite, 'uMask'), uErosionRadius: loc(this.pComposite, 'uErosionRadius'), uOutTexel: loc(this.pComposite, 'uOutTexel') },
+      segmo:      { uVideo: loc(this.pCompositeSegmo, 'uVideo'), uBg: loc(this.pCompositeSegmo, 'uBg'), uMask: loc(this.pCompositeSegmo, 'uMask'), uOutTexel: loc(this.pCompositeSegmo, 'uOutTexel') },
+      feather:    { uMask: loc(this.pSegmoEdgeFeather, 'uMask'), uTexel: loc(this.pSegmoEdgeFeather, 'uTexel'), uRadius: loc(this.pSegmoEdgeFeather, 'uRadius') },
+      lightWrap:  { uComposite: loc(this.pLightWrap, 'uComposite'), uBg: loc(this.pLightWrap, 'uBg'), uMask: loc(this.pLightWrap, 'uMask'), uStrength: loc(this.pLightWrap, 'uStrength') },
+      maskedFg:   { uVideo: loc(this.pMaskedFg, 'uVideo'), uMask: loc(this.pMaskedFg, 'uMask') },
+      fgCast:     { uVideo: loc(this.pFgColorCast, 'uVideo'), uFgMasked: loc(this.pFgColorCast, 'uFgMasked'), uBg: loc(this.pFgColorCast, 'uBg'), uStrength: loc(this.pFgColorCast, 'uStrength') },
+    }
   }
 }
