@@ -410,9 +410,73 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     return SegmentationModel.AUTO
   }
 
+  /**
+   * Common measurement protocol: 5 warm-up runs (displayed but not timed) +
+   * 15 timed runs on fresh video frames. Returns p75 latency in ms, or null
+   * if a warm-up run throws (caller decides how to handle).
+   * Each result is published to _latestPair so the render loop shows the
+   * effect building up during the benchmark.
+   */
+  private async _measureInferenceP75(seg: Segmenter): Promise<number | null> {
+    const width = seg.inputSize.width
+    const height = seg.inputSize.height
+
+    const benchCanvas = document.createElement('canvas')
+    benchCanvas.width = width
+    benchCanvas.height = height
+    const ctx = benchCanvas.getContext('2d')
+    if (!ctx) return null
+
+    const hasRealFrame = (): boolean =>
+      !!(this.videoElement &&
+        this.videoElement.readyState >= 2 &&
+        this.videoElement.videoWidth > 0)
+
+    const captureFrame = (): ImageData => {
+      if (hasRealFrame()) ctx.drawImage(this.videoElement!, 0, 0, width, height)
+      return ctx.getImageData(0, 0, width, height)
+    }
+
+    const publishFrame = async (mask: Float32Array): Promise<void> => {
+      if (!hasRealFrame()) return
+      const now = performance.now()
+      let bitmap: ImageBitmap
+      try { bitmap = await createImageBitmap(benchCanvas, { imageOrientation: 'flipY' }) }
+      catch { return }
+      if (this._destroyed) { bitmap.close(); return }
+      const prev = this._latestPair
+      this._latestPair = { mask, source: bitmap, captureTime: now, cameraCaptureTime: now, procW: width, procH: height }
+      prev?.source.close()
+    }
+
+    const WARMUP = 5
+    for (let i = 0; i < WARMUP; i++) {
+      if (this._destroyed) return null
+      const frame = captureFrame()
+      const mask = await seg.segment(frame, performance.now())  // throws → caller handles
+      await publishFrame(mask)
+    }
+
+    const RUNS = 15
+    const samples: number[] = []
+    for (let i = 0; i < RUNS; i++) {
+      if (this._destroyed) return null
+      const frame = captureFrame()
+      const start = performance.now()
+      const mask = await seg.segment(frame, performance.now())
+      samples.push(performance.now() - start)
+      await publishFrame(mask)
+    }
+
+    samples.sort((a, b) => a - b)
+    return samples[Math.floor(RUNS * 0.75)]  // p75: index 11 of 15
+  }
+
   private async _benchmarkSegmenter(
     seg: Segmenter
   ): Promise<'landscape' | 'multiclass_skip1' | 'multiclass_skip2'> {
+    const B = 'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;'
+    const W = 'color: #e2e8f0; font-family: monospace; font-size: 11px;'
     try {
       const probe = await probeMediapipeDelegate()
       if (probe === 'CPU') {
@@ -423,206 +487,121 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
           '│  Device WebGL Delegate is CPU.                             │\n' +
           '│  To prevent performance degradation, benchmarking is       │\n' +
           '│  skipped and Landscape fallback is automatically used.     │\n' +
-          '└────────────────────────────────────────────────────────────┘',
-          'color: #f59e0b; font-weight: bold; font-family: monospace; font-size: 11px;'
-        )
+          '└────────────────────────────────────────────────────────────┘', B)
         return 'landscape'
       }
 
-      const width = seg.inputSize.width
-      const height = seg.inputSize.height
-
-      // Reusable canvas for capturing fresh video frames during the benchmark.
-      const benchCanvas = document.createElement('canvas')
-      benchCanvas.width = width
-      benchCanvas.height = height
-      const ctx = benchCanvas.getContext('2d')
-      if (!ctx) return 'landscape'
-
-      const hasRealFrame = (): boolean =>
-        !!(this.videoElement &&
-          this.videoElement.readyState >= 2 &&
-          this.videoElement.videoWidth > 0)
-
-      // Draw the current video frame onto benchCanvas and return its ImageData.
-      // The canvas pixels remain available for createImageBitmap after this call.
-      const captureFrame = (): ImageData => {
-        if (hasRealFrame()) {
-          ctx.drawImage(this.videoElement!, 0, 0, width, height)
-        }
-        return ctx.getImageData(0, 0, width, height)
+      let p75: number | null
+      try { p75 = await this._measureInferenceP75(seg) }
+      catch {
+        console.warn(
+          '%c┌────────────────────────────────────────────────────────────┐\n' +
+          '│ [AMP BENCHMARK] WARM-UP FAILED                             │\n' +
+          '├────────────────────────────────────────────────────────────┤\n' +
+          '│  Warm-up run threw — safe fallback to Landscape.           │\n' +
+          '└────────────────────────────────────────────────────────────┘', B)
+        return 'landscape'
       }
+      if (p75 === null || this._destroyed) return 'landscape'
 
-      // Publish mask + bitmap as _latestPair so the render loop displays the
-      // result of each benchmark inference immediately. The user sees the effect
-      // building up run by run (choppy but not a frozen passthrough).
-      const publishBenchmarkFrame = async (mask: Float32Array): Promise<void> => {
-        if (!hasRealFrame()) return
-        const now = performance.now()
-        let bitmap: ImageBitmap
-        try {
-          bitmap = await createImageBitmap(benchCanvas, { imageOrientation: 'flipY' })
-        } catch {
-          return
-        }
-        if (this._destroyed) {
-          bitmap.close()
-          return
-        }
-        const prev = this._latestPair
-        this._latestPair = {
-          mask,
-          source: bitmap,
-          captureTime: now,
-          cameraCaptureTime: now,
-          procW: width,
-          procH: height,
-        }
-        prev?.source.close()
-      }
-
-      // Warm-up: 5 runs discarded so the GPU JIT-compiles shaders and reaches
-      // steady-state frequency before the timed window starts.
-      // Each run uses a fresh frame and publishes its result so the user starts
-      // seeing the matting effect even before the measured phase begins.
-      const WARMUP = 5
-      for (let i = 0; i < WARMUP; i++) {
-        if (this._destroyed) return 'landscape'
-        try {
-          const frame = captureFrame()
-          const mask = await seg.segment(frame, performance.now())
-          await publishBenchmarkFrame(mask)
-        } catch {
-          console.warn(
-            '%c┌────────────────────────────────────────────────────────────┐\n' +
-            '│ [AMP BENCHMARK] WARM-UP FAILED                             │\n' +
-            '├────────────────────────────────────────────────────────────┤\n' +
-            '│  Warm-up run threw an exception.                           │\n' +
-            '│  Safe fallback to Landscape mode initiated.                │\n' +
-            '└────────────────────────────────────────────────────────────┘',
-            'color: #ef4444; font-weight: bold; font-family: monospace; font-size: 11px;'
-          )
-          return 'landscape'
-        }
-      }
-
-      // Measured runs: 15 samples on fresh frames. Frame capture (drawImage +
-      // getImageData) and bitmap creation are done OUTSIDE the timer so only
-      // inference time is measured. Each result is published for display.
-      const RUNS = 15
-      const samples: number[] = []
-      for (let i = 0; i < RUNS; i++) {
-        if (this._destroyed) return 'landscape'
-        const frame = captureFrame()                 // outside the timed window
-        const start = performance.now()
-        const mask = await seg.segment(frame, performance.now())
-        samples.push(performance.now() - start)
-        await publishBenchmarkFrame(mask)            // display, outside the timer
-      }
-
-      samples.sort((a, b) => a - b)
-      const p75 = samples[Math.floor(RUNS * 0.75)]  // index 11 of 15
-
-      // Three-tier decision based on 30fps camera budget (33.3ms/frame).
-      // Using p75 rather than mean: 75% of real inferences will be at or below
-      // this latency, providing a realistic-yet-conservative baseline.
-      //   < 25ms  → Multiclass SKIP=1 (30fps segmenter, ~8ms GPU margin/frame)
-      //   25–50ms → Multiclass SKIP=2 (15fps, comfortable margin in 66.7ms window)
-      //   > 50ms  → Landscape fallback
       let result: 'landscape' | 'multiclass_skip1' | 'multiclass_skip2'
       let resultVal: string
       let resultColor: string
       if (p75 < 25) {
-        result = 'multiclass_skip1'
-        resultVal = 'PASS — Multiclass 30fps (skip=1)'
+        result = 'multiclass_skip1'; resultVal = 'PASS — Multiclass 30fps (skip=1)'
         resultColor = 'color: #10b981; font-weight: bold; font-family: monospace; font-size: 11px;'
       } else if (p75 <= 50) {
-        result = 'multiclass_skip2'
-        resultVal = 'PASS — Multiclass 15fps (skip=2)'
+        result = 'multiclass_skip2'; resultVal = 'PASS — Multiclass 15fps (skip=2)'
         resultColor = 'color: #f59e0b; font-weight: bold; font-family: monospace; font-size: 11px;'
       } else {
-        result = 'landscape'
-        resultVal = 'FAIL — Landscape fallback'
+        result = 'landscape'; resultVal = 'FAIL — Landscape fallback'
         resultColor = 'color: #ef4444; font-weight: bold; font-family: monospace; font-size: 11px;'
       }
 
-      const widthCard = 60
-      const padRight = (str: string, len: number) => str + ' '.repeat(Math.max(0, len - str.length))
-
-      const titleLine    = padRight(`  [AMP BENCHMARK] MULTICLASS PERFORMANCE`, widthCard)
-      const inputLabel   = `  Input:                     `
-      const inputVal     = hasRealFrame() ? 'real video frame' : 'dummy (no video yet)'
-      const inputPad     = ' '.repeat(Math.max(0, widthCard - inputLabel.length - inputVal.length))
-      const p75Label     = `  P75 Inference Latency:     `
-      const p75Val       = `${p75.toFixed(2)} ms`
-      const p75Pad       = ' '.repeat(Math.max(0, widthCard - p75Label.length - p75Val.length))
-      const runsLine     = padRight(`  Protocol: ${WARMUP} warm-up + ${RUNS} timed runs`, widthCard)
-      const tier1Line    = padRight(`  Tier 1 (skip=1, 30fps):   < 25.00 ms`, widthCard)
-      const tier2Line    = padRight(`  Tier 2 (skip=2, 15fps):  25–50.00 ms`, widthCard)
-      const tier3Line    = padRight(`  Tier 3 (Landscape):        > 50.00 ms`, widthCard)
-      const resultLabel  = `  Evaluation Result:         `
-      const resultPad    = ' '.repeat(Math.max(0, widthCard - resultLabel.length - resultVal.length))
-
+      const pad = (s: string, n: number) => s + ' '.repeat(Math.max(0, n - s.length))
+      const W60 = 60
+      const p75Str = `${p75.toFixed(2)} ms`
+      const resStr = resultVal
       console.log(
         `%c┌────────────────────────────────────────────────────────────┐\n` +
-        `%c│%c${titleLine}%c│\n` +
+        `%c│%c${pad('  [AMP BENCHMARK] MULTICLASS PERFORMANCE', W60)}%c│\n` +
         `%c├────────────────────────────────────────────────────────────┤\n` +
-        `%c│%c${inputLabel}%c${inputVal}%c${inputPad}│\n` +
-        `%c│%c${runsLine}%c│\n` +
-        `%c│%c${p75Label}%c${p75Val}%c${p75Pad}│\n` +
+        `%c│%c  Protocol: 5 warm-up + 15 timed runs, fresh frames${' '.repeat(W60 - 50)}%c│\n` +
+        `%c│%c  P75 Inference Latency:     %c${p75Str}${' '.repeat(Math.max(0, W60 - 28 - p75Str.length))}%c│\n` +
         `%c├────────────────────────────────────────────────────────────┤\n` +
-        `%c│%c${tier1Line}%c│\n` +
-        `%c│%c${tier2Line}%c│\n` +
-        `%c│%c${tier3Line}%c│\n` +
+        `%c│%c${pad('  Tier 1 (skip=1, 30fps):   < 25.00 ms', W60)}%c│\n` +
+        `%c│%c${pad('  Tier 2 (skip=2, 15fps):  25–50.00 ms', W60)}%c│\n` +
+        `%c│%c${pad('  Tier 3 (Landscape):        > 50.00 ms', W60)}%c│\n` +
         `%c├────────────────────────────────────────────────────────────┤\n` +
-        `%c│%c${resultLabel}%c${resultVal}%c${resultPad}│\n` +
+        `%c│%c  Evaluation Result:         %c${resStr}${' '.repeat(Math.max(0, W60 - 28 - resStr.length))}%c│\n` +
         `%c└────────────────────────────────────────────────────────────┘`,
-        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',  // top border
-        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',  // │
-        'color: #60a5fa; font-weight: bold; font-family: monospace; font-size: 11px;',  // title
-        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',  // │
-        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',  // ├
-        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',  // │
-        'color: #e2e8f0; font-family: monospace; font-size: 11px;',                     // input label
-        'color: #a78bfa; font-weight: bold; font-family: monospace; font-size: 11px;',  // input val
-        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',  // │
-        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',  // │
-        'color: #e2e8f0; font-family: monospace; font-size: 11px;',                     // runs line
-        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',  // │
-        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',  // │
-        'color: #e2e8f0; font-family: monospace; font-size: 11px;',                     // p75 label
-        'color: #f59e0b; font-weight: bold; font-family: monospace; font-size: 11px;',  // p75 val
-        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',  // │
-        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',  // ├
-        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',  // │
-        'color: #e2e8f0; font-family: monospace; font-size: 11px;',                     // tier1
-        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',  // │
-        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',  // │
-        'color: #e2e8f0; font-family: monospace; font-size: 11px;',                     // tier2
-        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',  // │
-        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',  // │
-        'color: #e2e8f0; font-family: monospace; font-size: 11px;',                     // tier3
-        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',  // │
-        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',  // ├
-        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',  // │
-        'color: #e2e8f0; font-family: monospace; font-size: 11px;',                     // result label
-        resultColor,                                                                      // result val
-        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;',  // │
-        'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;'   // bottom border
-      )
+        B, B, 'color: #60a5fa; font-weight: bold; font-family: monospace; font-size: 11px;', B,
+        B, B, W, B, B, W, 'color: #f59e0b; font-weight: bold; font-family: monospace; font-size: 11px;', B,
+        B, B, W, B, B, W, B, B, W, B,
+        B, B, W, resultColor, B, B)
 
       return result
-    } catch (e) {
+    } catch {
       console.warn(
         '%c┌────────────────────────────────────────────────────────────┐\n' +
-        '│ [AMP BENCHMARK] ERROR ENCOUNTERED                          │\n' +
-        '├────────────────────────────────────────────────────────────┤\n' +
-        '│  Benchmark execution failed.                               │\n' +
-        '│  Falling back safely to Landscape mode.                    │\n' +
-        '└────────────────────────────────────────────────────────────┘',
-        'color: #ef4444; font-weight: bold; font-family: monospace; font-size: 11px;'
-      )
+        '│ [AMP BENCHMARK] ERROR — falling back to Landscape.         │\n' +
+        '└────────────────────────────────────────────────────────────┘', B)
       return 'landscape'
+    }
+  }
+
+  private async _benchmarkLandscapeSkip(seg: Segmenter): Promise<'skip1' | 'skip2'> {
+    const B = 'color: #3b82f6; font-weight: bold; font-family: monospace; font-size: 11px;'
+    const W = 'color: #e2e8f0; font-family: monospace; font-size: 11px;'
+    try {
+      let p75: number | null
+      try { p75 = await this._measureInferenceP75(seg) }
+      catch {
+        console.warn(
+          '%c┌────────────────────────────────────────────────────────────┐\n' +
+          '│ [AMP BENCHMARK] LANDSCAPE WARM-UP FAILED → skip=2         │\n' +
+          '└────────────────────────────────────────────────────────────┘', B)
+        return 'skip2'
+      }
+      if (p75 === null || this._destroyed) return 'skip2'
+
+      // Two-tier: no further model fallback possible, skip=2 is the floor.
+      //   < 25ms  → skip=1 (30fps, ~8ms GPU margin/frame)
+      //   ≥ 25ms  → skip=2 (15fps, fits in 66.7ms window)
+      const result: 'skip1' | 'skip2' = p75 < 25 ? 'skip1' : 'skip2'
+      const resultVal = result === 'skip1' ? 'PASS — 30fps (skip=1)' : 'FALLBACK — 15fps (skip=2)'
+      const resultColor = result === 'skip1'
+        ? 'color: #10b981; font-weight: bold; font-family: monospace; font-size: 11px;'
+        : 'color: #f59e0b; font-weight: bold; font-family: monospace; font-size: 11px;'
+
+      const pad = (s: string, n: number) => s + ' '.repeat(Math.max(0, n - s.length))
+      const W60 = 60
+      const p75Str = `${p75.toFixed(2)} ms`
+      const resStr = resultVal
+      console.log(
+        `%c┌────────────────────────────────────────────────────────────┐\n` +
+        `%c│%c${pad('  [AMP BENCHMARK] LANDSCAPE SKIP SELECTION', W60)}%c│\n` +
+        `%c├────────────────────────────────────────────────────────────┤\n` +
+        `%c│%c  Protocol: 5 warm-up + 15 timed runs, fresh frames${' '.repeat(W60 - 50)}%c│\n` +
+        `%c│%c  P75 Inference Latency:     %c${p75Str}${' '.repeat(Math.max(0, W60 - 28 - p75Str.length))}%c│\n` +
+        `%c├────────────────────────────────────────────────────────────┤\n` +
+        `%c│%c${pad('  Tier 1 (skip=1, 30fps):   < 25.00 ms', W60)}%c│\n` +
+        `%c│%c${pad('  Tier 2 (skip=2, 15fps):   ≥ 25.00 ms', W60)}%c│\n` +
+        `%c├────────────────────────────────────────────────────────────┤\n` +
+        `%c│%c  Evaluation Result:         %c${resStr}${' '.repeat(Math.max(0, W60 - 28 - resStr.length))}%c│\n` +
+        `%c└────────────────────────────────────────────────────────────┘`,
+        B, B, 'color: #34d399; font-weight: bold; font-family: monospace; font-size: 11px;', B,
+        B, B, W, B, B, W, 'color: #f59e0b; font-weight: bold; font-family: monospace; font-size: 11px;', B,
+        B, B, W, B, B, W, B,
+        B, B, W, resultColor, B, B)
+
+      return result
+    } catch {
+      console.warn(
+        '%c┌────────────────────────────────────────────────────────────┐\n' +
+        '│ [AMP BENCHMARK] LANDSCAPE ERROR → skip=2 (safe default)   │\n' +
+        '└────────────────────────────────────────────────────────────┘', B)
+      return 'skip2'
     }
   }
 
@@ -711,10 +690,9 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
         return
       }
 
-      // Benchmark whenever Multiclass is the candidate (AUTO or explicit).
-      // AUTO: 'landscape' result triggers a real fallback to Landscape.
-      // Explicit MULTICLASS: 'landscape' result is ignored (user chose explicitly)
-      //   but skip is still set to 2 as the conservative safe value.
+      // Benchmark Multiclass whenever it is the candidate (AUTO or explicit).
+      // AUTO: 'landscape' result triggers a real fallback; explicit MULTICLASS:
+      // 'landscape' result is ignored but skip defaults to 2 (conservative).
       if (targetModel === SegmentationModel.MULTICLASS) {
         const benchResult = await this._benchmarkSegmenter(seg)
         if (this._destroyed || this._pendingModel !== model) {
@@ -730,9 +708,21 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
             seg.destroy()
             return
           }
+          // Skip for this Landscape fallback is determined below.
         } else {
           this._segmenterFrameSkip = benchResult === 'multiclass_skip1' ? 1 : 2
         }
+      }
+
+      // Benchmark Landscape skip when it is the active model — whether selected
+      // explicitly or as a fallback from the Multiclass benchmark above.
+      if (targetModel === SegmentationModel.LANDSCAPE) {
+        const skipResult = await this._benchmarkLandscapeSkip(seg)
+        if (this._destroyed || this._pendingModel !== model) {
+          seg.destroy()
+          return
+        }
+        this._segmenterFrameSkip = skipResult === 'skip1' ? 1 : 2
       }
 
       if (this._destroyed) {
@@ -796,6 +786,15 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
         } else {
           this._segmenterFrameSkip = benchResult === 'multiclass_skip1' ? 1 : 2
         }
+      }
+
+      if (targetModel === SegmentationModel.LANDSCAPE) {
+        const skipResult = await this._benchmarkLandscapeSkip(seg)
+        if (this._destroyed || this._pendingModel !== model) {
+          seg.destroy()
+          return
+        }
+        this._segmenterFrameSkip = skipResult === 'skip1' ? 1 : 2
       }
 
       if (this._destroyed) {
@@ -1108,28 +1107,33 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     }
   }
 
-  // Slightly below 60fps so floating-point jitter in rAF timestamps doesn't
-  // cause every-other-frame skipping (threshold == rAF interval → ~30fps).
-  private static readonly RENDER_TARGET_MS = 1000 / 65
-  private _lastRenderTime = 0
+  // Last _videoFrameSeq value that triggered a render. Compared to
+  // _videoFrameSeq each rAF tick: render fires only when a new camera frame
+  // has actually arrived, bounding render FPS to camera FPS.
+  private _lastRenderedSeq = -1
 
   private _scheduleRender(): void {
     if (!this._segLoopActive) return
-    this._renderLoopHandle = requestAnimationFrame((now) => {
-      // Camera FPS probe (fallback only): when rVFC is active, `tickCameraFrame()`
-      // is called from the rVFC callback on every real camera tick — which is
-      // both more accurate and not perturbed by GPU/main-thread contention. We
-      // only fall back to `currentTime` polling when rVFC isn't available.
-      if (this._rvfcHandle === null && this.videoElement) {
-        const t = this.videoElement.currentTime
-        if (t !== this._lastVideoTime) {
-          this._lastVideoTime = t
-          tickCameraFrame()
+    this._renderLoopHandle = requestAnimationFrame(() => {
+      if (this._rvfcHandle !== null) {
+        // rVFC active: _videoFrameSeq increments on every real camera frame.
+        // Render exactly once per new frame — no duplicate composites.
+        const seq = this._videoFrameSeq
+        if (seq > this._lastRenderedSeq) {
+          this._lastRenderedSeq = seq
+          this._renderFrame()
         }
-      }
-      if (now - this._lastRenderTime >= AdvancedMattingProcessor.RENDER_TARGET_MS) {
-        this._lastRenderTime = now
-        this._renderFrame()
+      } else {
+        // No rVFC (older browsers): detect new frames via currentTime change.
+        // Also tick the camera FPS counter since the rVFC callback isn't firing.
+        if (this.videoElement) {
+          const t = this.videoElement.currentTime
+          if (t !== this._lastVideoTime) {
+            this._lastVideoTime = t
+            tickCameraFrame()
+            this._renderFrame()
+          }
+        }
       }
       this._scheduleRender()
     })
@@ -1415,6 +1419,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     this._lastVideoTime = -1
     this._videoFrameSeq = 0
     this._lastInferenceSeq = -1
+    this._lastRenderedSeq = -1
     this._motionTracker.reset()
     this._lastEffectiveMode = 'frameLock'
     this._cancelRender()
