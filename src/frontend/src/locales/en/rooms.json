@@ -366,8 +366,17 @@
           "4": "Wooden shelves",
           "5": "Wooden staircase",
           "6": "Gray library",
-          "7": "Coffee counter"
+          "7": "Coffee counter",
+          "8": "Meeting room with city view"
         }
+      },
+      "themes": {
+        "interior": "Interior & Office",
+        "nature": "Nature",
+        "urban": "City & Urban",
+        "abstract": "Abstract",
+        "tech": "Technology",
+        "childhood": "Childhood"
       }
     },
     "stats": {
@@ -388,7 +397,8 @@
         "WEBGL2_INIT_FAILED": "WebGL2 is not available in this browser. The video effect cannot be applied.",
         "CAPTURESTREAM_UNSUPPORTED": "This browser does not support the video capture required for processing.",
         "VIRTUAL_BG_LOAD_FAILED": "The background image could not be loaded.",
-        "POSTPROCESS_SHADER_COMPILE_FAILED": "A GPU error is preventing the effect from working."
+        "POSTPROCESS_SHADER_COMPILE_FAILED": "A GPU error is preventing the effect from working.",
+        "CANVAS2D_FALLBACK": "GPU rendering unavailable, falling back to Canvas2D. Performance may be reduced."
       }
     },
     "faceLandmarks": {

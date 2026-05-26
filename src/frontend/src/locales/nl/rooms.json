@@ -366,8 +366,17 @@
           "4": "Houten planken",
           "5": "Houten trap",
           "6": "Grijze bibliotheek",
-          "7": "Koffiebar"
+          "7": "Koffiebar",
+          "8": "Vergaderruimte met stadszicht"
         }
+      },
+      "themes": {
+        "interior": "Interieur & Kantoor",
+        "nature": "Natuur",
+        "urban": "Stad & Urbaan",
+        "abstract": "Abstract",
+        "tech": "Technologie",
+        "childhood": "Kindertijd"
       }
     },
     "stats": {
@@ -388,7 +397,8 @@
         "WEBGL2_INIT_FAILED": "WebGL2 is niet beschikbaar in deze browser. Het video-effect kan niet worden toegepast.",
         "CAPTURESTREAM_UNSUPPORTED": "Deze browser ondersteunt de vereiste videovastlegging voor verwerking niet.",
         "VIRTUAL_BG_LOAD_FAILED": "De achtergrondafbeelding kon niet worden geladen.",
-        "POSTPROCESS_SHADER_COMPILE_FAILED": "Een GPU-fout verhindert het werken van het effect."
+        "POSTPROCESS_SHADER_COMPILE_FAILED": "Een GPU-fout verhindert het werken van het effect.",
+        "CANVAS2D_FALLBACK": "GPU-rendering niet beschikbaar, Canvas2D-fallback actief. De prestaties kunnen verminderd zijn."
       }
     },
     "faceLandmarks": {

@@ -37,6 +37,11 @@ export function getMediapipeFileset(): Promise<any> {
   return _filesetPromise
 }
 
+// Set to true to bypass the GPU probe and force MediaPipe to run on CPU.
+// Useful for debugging: lets you check if the matting pipeline works at all
+// without GPU acceleration. Expect ~80–150 ms/frame → visible lag at 256².
+const FORCE_CPU_DELEGATE = false
+
 let _delegateProbe: Promise<'GPU' | 'CPU'> | null = null
 
 /**
@@ -49,6 +54,10 @@ let _delegateProbe: Promise<'GPU' | 'CPU'> | null = null
  */
 export function probeMediapipeDelegate(): Promise<'GPU' | 'CPU'> {
   if (_delegateProbe) return _delegateProbe
+  if (FORCE_CPU_DELEGATE) {
+    _delegateProbe = Promise.resolve('CPU')
+    return _delegateProbe
+  }
   _delegateProbe = (async () => {
     // Quick WebGL2 check first — without it the GPU delegate has nowhere to run.
     let webgl2Available = false

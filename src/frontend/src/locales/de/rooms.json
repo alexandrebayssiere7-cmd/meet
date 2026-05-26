@@ -366,11 +366,19 @@
           "4": "Holzregale",
           "5": "Holztreppe",
           "6": "Graue Bibliothek",
-          "7": "Kaffeetheke"
+          "7": "Kaffeetheke",
+          "8": "Besprechungsraum mit Stadtblick"
         }
+      },
+      "themes": {
+        "interior": "Innenräume & Büro",
+        "nature": "Natur",
+        "urban": "Stadt & Urban",
+        "abstract": "Abstrakt",
+        "tech": "Technologie",
+        "childhood": "Kindheit"
       }
     },
-
     "stats": {
       "title": "Matting-Diagnose",
       "activeModel": "Aktives Modell",
@@ -389,7 +397,8 @@
         "WEBGL2_INIT_FAILED": "WebGL2 ist in diesem Browser nicht verfügbar. Der Videoeffekt kann nicht angewendet werden.",
         "CAPTURESTREAM_UNSUPPORTED": "Dieser Browser unterstützt die für die Verarbeitung erforderliche Videoaufnahme nicht.",
         "VIRTUAL_BG_LOAD_FAILED": "Das Hintergrundbild konnte nicht geladen werden.",
-        "POSTPROCESS_SHADER_COMPILE_FAILED": "Ein GPU-Fehler verhindert die Funktion des Effekts."
+        "POSTPROCESS_SHADER_COMPILE_FAILED": "Ein GPU-Fehler verhindert die Funktion des Effekts.",
+        "CANVAS2D_FALLBACK": "GPU-Rendering nicht verfügbar, Canvas2D-Fallback aktiv. Die Leistung kann eingeschränkt sein."
       }
     },
     "faceLandmarks": {

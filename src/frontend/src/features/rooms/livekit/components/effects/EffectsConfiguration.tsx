@@ -49,6 +49,15 @@ enum BlurRadius {
 
 const isSupported = BackgroundProcessorFactory.isSupported()
 
+const BACKGROUND_THEMES: Array<{ key: string; indices: number[] }> = [
+  { key: 'interior', indices: [1, 2, 3, 4, 5, 6, 7, 8, 9] },
+  { key: 'nature',   indices: [] },
+  { key: 'urban',    indices: [] },
+  { key: 'abstract', indices: [] },
+  { key: 'tech',     indices: [] },
+  { key: 'childhood',indices: [] },
+]
+
 const Information = styled('div', {
   base: {
     backgroundColor: 'orange.50',
@@ -815,14 +824,16 @@ export const EffectsConfiguration = ({
       config: ProcessorConfig
       isSelected: boolean
     }[]
-    virtualBackgrounds: {
-      id: string
-      config: ProcessorConfig
-      isSelected: boolean
-      tooltip: string
-      ariaLabel: string
-      thumbnailPath: string
-      index: number
+    virtualBackgroundThemes: {
+      key: string
+      backgrounds: {
+        id: string
+        config: ProcessorConfig
+        isSelected: boolean
+        backgroundName: string
+        ariaLabel: string
+        thumbnailPath: string
+      }[]
     }[]
     remoteCustomVirtualBackgrounds: {
       id: string
@@ -863,29 +874,26 @@ export const EffectsConfiguration = ({
           config,
         }
       }),
-      virtualBackgrounds: [...Array(8).keys()].map((index) => {
-        const imagePath = `/assets/backgrounds/${index + 1}.jpg`
-        const thumbnailPath = `/assets/backgrounds/thumbnails/${index + 1}.jpg`
-        const config: ProcessorConfig = {
-          type: ProcessorType.VIRTUAL,
-          imagePath,
-        }
-        const id = deriveIdFromProcessorConfig(config)
-        const isSelected = selectedId === id
-        const prefix = isSelected ? 'selectedLabel' : 'apply'
-        const backgroundName = t(`virtual.presets.descriptions.${index}`)
-        const ariaLabel = `${t(`virtual.presets.${prefix}`)} ${backgroundName}`
-
-        return {
-          tooltip: backgroundName,
-          id,
-          config,
-          isSelected: selectedId === id,
-          thumbnailPath,
-          ariaLabel,
-          index,
-        }
-      }),
+      virtualBackgroundThemes: BACKGROUND_THEMES
+        .map(theme => ({
+          key: theme.key,
+          backgrounds: theme.indices.map(fileIndex => {
+            const arrIndex = fileIndex - 1
+            const imagePath = `/assets/backgrounds/${fileIndex}.jpg`
+            const thumbnailPath = `/assets/backgrounds/thumbnails/${fileIndex}.jpg`
+            const config: ProcessorConfig = {
+              type: ProcessorType.VIRTUAL,
+              imagePath,
+            }
+            const id = deriveIdFromProcessorConfig(config)
+            const isSelected = selectedId === id
+            const prefix = isSelected ? 'selectedLabel' : 'apply'
+            const backgroundName = t(`virtual.presets.descriptions.${arrIndex}`)
+            const ariaLabel = `${t(`virtual.presets.${prefix}`)} ${backgroundName}`
+            return { id, config, isSelected, thumbnailPath, ariaLabel, backgroundName }
+          }),
+        }))
+        .filter(theme => theme.backgrounds.length > 0),
       remoteCustomVirtualBackgrounds: (filesQ.data?.results ?? [])
         .filter((file) => file.url)
         .map((file) => {
@@ -1299,48 +1307,43 @@ export const EffectsConfiguration = ({
                   </Text>
                 )}
               </div>
-              <div
-                className={css({
-                  marginTop: '0.4rem',
-                })}
-              >
-                <H
-                  lvl={2}
-                  style={{
-                    marginBottom: '0.4rem',
-                  }}
-                  variant="bodyXsMedium"
-                >
-                  {t('virtual.presets.title')}
-                </H>
+              {processorOptions.virtualBackgroundThemes.map(theme => (
                 <div
-                  className={css({
-                    display: 'flex',
-                    gap: '1.25rem',
-                    paddingBottom: '0.5rem',
-                    flexWrap: 'wrap',
-                  })}
+                  key={theme.key}
+                  className={css({ marginTop: '0.4rem' })}
                 >
-                  {processorOptions.virtualBackgrounds.map((option) => (
-                    <VisualOnlyTooltip key={option.id} tooltip={option.tooltip}>
-                      <ToggleButton
-                        variant="bigSquare"
-                        aria-label={option.ariaLabel}
-                        isDisabled={processorOptions.isDisabled}
-                        onChange={() => toggleEffect(option.config)}
-                        isSelected={option.isSelected}
-                        className={css({
-                          bgSize: 'cover',
-                        })}
-                        style={{
-                          backgroundImage: `url(${option.thumbnailPath})`,
-                        }}
-                        data-attr={`toggle-virtual-preset-${option.index}`}
-                      />
-                    </VisualOnlyTooltip>
-                  ))}
+                  <H
+                    lvl={3}
+                    style={{ marginBottom: '0.4rem' }}
+                    variant="bodyXsMedium"
+                  >
+                    {t(`virtual.themes.${theme.key}`)}
+                  </H>
+                  <div
+                    className={css({
+                      display: 'flex',
+                      gap: '1.25rem',
+                      paddingBottom: '0.5rem',
+                      flexWrap: 'wrap',
+                    })}
+                  >
+                    {theme.backgrounds.map(option => (
+                      <VisualOnlyTooltip key={option.id} tooltip={option.backgroundName}>
+                        <ToggleButton
+                          variant="bigSquare"
+                          aria-label={option.ariaLabel}
+                          isDisabled={processorOptions.isDisabled}
+                          onChange={() => toggleEffect(option.config)}
+                          isSelected={option.isSelected}
+                          className={css({ bgSize: 'cover' })}
+                          style={{ backgroundImage: `url(${option.thumbnailPath})` }}
+                          data-attr={`toggle-virtual-preset-${option.id}`}
+                        />
+                      </VisualOnlyTooltip>
+                    ))}
+                  </div>
                 </div>
-              </div>
+              ))}
 
               {/* Advanced matting settings */}
               <div

@@ -13,6 +13,7 @@ export type MattingErrorCode =
   | 'VIRTUAL_BG_LOAD_FAILED'
   | 'RVM_INIT_FAILED'
   | 'RVM_INFERENCE_FAILED'
+  | 'CANVAS2D_FALLBACK'
 
 export type MattingErrorLevel = 'info' | 'warn' | 'error'
 

@@ -15,7 +15,9 @@ import { MaskMotionTracker } from './preprocessing/MaskMotionTracker'
 import { BBox } from './preprocessing/RoiCropper'
 import { Segmenter, createSegmenter, RVMSegmenter, probeMediapipeDelegate } from './segmenters'
 import { WebGl2Renderer } from './renderers/WebGl2Renderer'
-import { pushMattingError } from './errors/MattingErrorStore'
+import { Canvas2dRenderer } from './renderers/Canvas2dRenderer'
+import { GpuRenderer, GpuRendererInitOpts } from './renderers/GpuRenderer'
+import { pushMattingError, dismissMattingError } from './errors/MattingErrorStore'
 import {
   pushGapSample,
   pushInferenceSample,
@@ -150,7 +152,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
   private static readonly MOTION_H = 72
 
   segmenter?: Segmenter
-  private gpuRenderer?: WebGl2Renderer
+  private gpuRenderer?: GpuRenderer
   private _passthroughMask?: Float32Array
 
   // Two-loop state
@@ -304,15 +306,15 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
 
       if (this._destroyed) return
 
-      this.gpuRenderer = new WebGl2Renderer()
-      await this.gpuRenderer.init(this.outputCanvas!, {
+      const rendererOpts: GpuRendererInitOpts = {
         outW: realW,
         outH: realH,
         processingW: this.processingWidth,
         processingH: this.processingHeight,
         postProcessing: this._getPostProcessingConfig(),
         upsampling: this._getUpsamplingConfig(),
-      })
+      }
+      this.gpuRenderer = await this._initRendererWithFallback(rendererOpts)
       this._applyRendererConfig()
 
       if (this._destroyed) return
@@ -654,6 +656,28 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     return undefined
   }
 
+
+  /**
+   * Try WebGL2; if unavailable, fall back silently to Canvas2D so matting
+   * stays functional (degraded quality) on machines without GPU support.
+   */
+  private async _initRendererWithFallback(opts: GpuRendererInitOpts): Promise<GpuRenderer> {
+    const webgl2 = new WebGl2Renderer()
+    try {
+      await webgl2.init(this.outputCanvas!, opts)
+      return webgl2
+    } catch (e) {
+      pushMattingError({
+        code: 'CANVAS2D_FALLBACK',
+        level: 'info',
+        detail: `WebGL2 unavailable, using Canvas2D fallback: ${e instanceof Error ? e.message : String(e)}`,
+      })
+      const c2d = new Canvas2dRenderer()
+      await c2d.init(this.outputCanvas!, opts)
+      dismissMattingError('WEBGL2_INIT_FAILED')
+      return c2d
+    }
+  }
 
   private _applyRendererConfig() {
     if (!this.gpuRenderer) return
