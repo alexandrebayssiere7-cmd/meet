@@ -1,5 +1,13 @@
 import { PostProcessingConfig, UpsamplingConfig } from '..'
 
+/**
+ * Source accepted by GpuRenderer.render(). HTMLVideoElement is the live
+ * camera path (passthrough or maxFrameOffset > 0 with fresh mask). ImageBitmap
+ * is used for frame-locked composite, where the source is the exact frame
+ * that produced the current mask.
+ */
+export type RenderSource = HTMLVideoElement | ImageBitmap
+
 export interface GpuRendererInitOpts {
   processingW: number
   processingH: number
@@ -29,7 +37,7 @@ export interface GpuRenderer {
   setMode(mode: 'blur' | 'virtual'): void
   setPostProcessing(cfg: PostProcessingConfig): void
   setUpsampling(cfg: UpsamplingConfig): void
-  render(videoElement: HTMLVideoElement): void
+  render(source: RenderSource): void
   /** Read a small RGBA8 patch — used by preflight diagnostics. */
   readPixels(x: number, y: number, w: number, h: number): Uint8Array
   destroy(): void

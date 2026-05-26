@@ -1,6 +1,6 @@
 import { PostProcessingConfig, UpsamplingConfig } from '..'
 import { pushMattingError } from '../errors/MattingErrorStore'
-import { GpuRenderer, GpuRendererInitOpts } from './GpuRenderer'
+import { GpuRenderer, GpuRendererInitOpts, RenderSource } from './GpuRenderer'
 import { GpuGuidedFilter } from './GpuGuidedFilter'
 
 /**
@@ -316,13 +316,25 @@ export class WebGl2Renderer implements GpuRenderer {
     }
   }
 
-  render(videoElement: HTMLVideoElement) {
-    if (!videoElement || videoElement.videoWidth === 0) return
+  render(source: RenderSource) {
+    if (!source) return
+    const isVideo = (source as HTMLVideoElement).videoWidth !== undefined
+    const sw = isVideo
+      ? (source as HTMLVideoElement).videoWidth
+      : (source as ImageBitmap).width
+    if (!sw) return
     const gl = this.gl
 
-    // 1. Upload current video frame to videoTex (full output size).
+    // 1. Upload current source frame to videoTex (full output size).
+    // The shader assumes texture origin = bottom-left. For HTMLVideoElement
+    // we let the global UNPACK_FLIP_Y_WEBGL=true do the flip. For
+    // ImageBitmap, the bitmap is pre-flipped at creation (imageOrientation
+    // 'flipY') because UNPACK_FLIP_Y_WEBGL is unreliable for bitmaps across
+    // browsers — so we explicitly disable the GL flip for this upload, then
+    // restore it afterwards to preserve global state used by other uploads.
     gl.activeTexture(gl.TEXTURE0)
     gl.bindTexture(gl.TEXTURE_2D, this.videoTex)
+    if (!isVideo) gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false)
     try {
       gl.texImage2D(
         gl.TEXTURE_2D,
@@ -330,13 +342,15 @@ export class WebGl2Renderer implements GpuRenderer {
         gl.RGBA,
         gl.RGBA,
         gl.UNSIGNED_BYTE,
-        videoElement
+        source
       )
     } catch (e) {
+      if (!isVideo) gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true)
       // Some browsers throw if the video frame isn't ready yet — skip this tick.
       void e
       return
     }
+    if (!isVideo) gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true)
 
     // 2. Run post-processing chain on the mask at processing resolution.
     const procMaskTex = this._runPostProcessing()

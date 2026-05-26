@@ -43,6 +43,7 @@ export type ProcessorConfig =
       rvmDownsampleRatio?: number
       postProcessing?: PostProcessingConfig
       upsampling?: UpsamplingConfig
+      maxFrameOffset?: number
     }
   | {
       type: ProcessorType.VIRTUAL
@@ -53,6 +54,7 @@ export type ProcessorConfig =
       rvmDownsampleRatio?: number
       postProcessing?: PostProcessingConfig
       upsampling?: UpsamplingConfig
+      maxFrameOffset?: number
     }
   | ({ type: ProcessorType.FACE_LANDMARKS } & FaceLandmarksOptions)
 

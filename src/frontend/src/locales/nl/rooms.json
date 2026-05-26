@@ -267,6 +267,9 @@
         "manual": "Handmatige downsample-ratio",
         "label": "Downsample-ratio (RVM)"
       },
+      "sync": {
+        "title": "Masker / frame-synchronisatie"
+      },
       "preProcessing": {
         "title": "Voorbewerking",
         "roiCropping": "Persoonsuitsnede (ROI)"
@@ -288,7 +291,9 @@
         "emaAlpha": "Reactiviteit (EMA)",
         "blurRadius": "Vervaging-intensiteit",
         "upsamplingRadius": "Straal (Guided Filter)",
-        "upsamplingEps": "Regularisatie (Guided Filter)"
+        "upsamplingEps": "Regularisatie (Guided Filter)",
+        "maxFrameOffset": "Max. masker / frame-versatz (frames)",
+        "maxFrameOffsetStrict": "vergrendeld"
       },
       "apply": "Toepassen"
     },

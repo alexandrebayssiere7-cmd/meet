@@ -243,6 +243,14 @@ export const EffectsConfiguration = ({
   const [closingRadius, setClosingRadius] = useState<number>(
     initialPP.closing?.radius ?? 0
   )
+  const initialMaxFrameOffset: number =
+    (processorConfig &&
+      (processorConfig.type === ProcessorType.BLUR ||
+        processorConfig.type === ProcessorType.VIRTUAL) &&
+      processorConfig.maxFrameOffset) ||
+    0
+  const [maxFrameOffset, setMaxFrameOffset] =
+    useState<number>(initialMaxFrameOffset)
 
   // Continuous blur radius slider; only meaningful when a blur effect is selected.
   const initialBlurRadius =
@@ -304,11 +312,12 @@ export const EffectsConfiguration = ({
               : undefined,
           postProcessing: buildPostProcessing(),
           upsampling: buildUpsampling(),
+          maxFrameOffset,
         }
       }
       return config
     },
-    [model, buildPreProcessing, rvmManual, rvmRatio, buildPostProcessing, buildUpsampling]
+    [model, buildPreProcessing, rvmManual, rvmRatio, buildPostProcessing, buildUpsampling, maxFrameOffset]
   )
 
   const selectedId = useMemo(
@@ -1308,6 +1317,36 @@ export const EffectsConfiguration = ({
                     />
                   </div>
                 )}
+
+                <H
+                  lvl={3}
+                  style={{ marginBottom: '0.4rem' }}
+                  variant="bodyXsMedium"
+                >
+                  {t('advanced.sync.title')}
+                </H>
+                <div
+                  className={css({
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '0.35rem',
+                    marginBottom: '1rem',
+                  })}
+                >
+                  <SliderRow
+                    label={t('advanced.params.maxFrameOffset')}
+                    displayValue={
+                      maxFrameOffset === 0
+                        ? t('advanced.params.maxFrameOffsetStrict')
+                        : `${maxFrameOffset}`
+                    }
+                    value={maxFrameOffset}
+                    min={0}
+                    max={10}
+                    step={1}
+                    onChange={setMaxFrameOffset}
+                  />
+                </div>
 
                 <H
                   lvl={3}

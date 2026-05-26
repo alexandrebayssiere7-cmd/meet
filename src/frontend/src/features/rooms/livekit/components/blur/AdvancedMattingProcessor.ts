@@ -19,14 +19,32 @@ const BLUR_CANVAS_ID = 'background-blur-local'
 const DEFAULT_BLUR = 10
 
 /**
+ * Pair of mask + the exact source frame that produced it. Stored together to
+ * allow frame-locked compositing (mask applied to its own source frame, no
+ * spatial mismatch).
+ */
+interface FrameMaskPair {
+  mask: Float32Array
+  source: ImageBitmap
+  captureTime: number
+  procW: number
+  procH: number
+}
+
+/**
  * Unified background processor using WebGL2 for compositing.
  *
  * Two independent loops:
- *   Segmenter loop  — free-running async, pulls frames, runs inference, writes
- *                     to _latestMask as fast as the GPU allows.
+ *   Segmenter loop  — free-running async, pulls frames, runs inference, then
+ *                     publishes a (mask, captured frame) pair as
+ *                     _latestPair as fast as the GPU allows.
  *   Render loop     — requestVideoFrameCallback (fallback: rAF), fires at the
- *                     camera's native framerate, composites the latest available
- *                     mask without ever blocking on inference.
+ *                     camera's native framerate, composites using the pair so
+ *                     the mask is always applied to the frame it was computed
+ *                     from (frame-locked). When maxFrameOffset > 0, the render
+ *                     loop may instead apply the mask to the live <video>
+ *                     frame as long as the pair is younger than N frames
+ *                     (latency vs. halo trade-off, user-controlled).
  *
  * Decoupling prevents RVM's ~20-50ms inference from introducing render jitter.
  * All blur passes run in GLSL shaders — no ctx.filter (unreliable on Safari).
@@ -48,14 +66,30 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
   segmentationMaskCanvasCtx?: CanvasRenderingContext2D
   sourceImageData?: ImageData
 
+  // Full-res snapshot canvas: a single sync drawImage(videoElement) per
+  // segmenter iteration, used to derive both the segmenter input AND the
+  // ImageBitmap consumed by the renderer — guaranteeing both come from the
+  // exact same video instant (no drift while createImageBitmap awaits).
+  private _snapshotCanvas?: HTMLCanvasElement
+  private _snapshotCanvasCtx?: CanvasRenderingContext2D
+
+  private _motionCanvas?: HTMLCanvasElement
+  private _motionCanvasCtx?: CanvasRenderingContext2D
+  private static readonly MOTION_W = 128
+  private static readonly MOTION_H = 72
+
   segmenter?: Segmenter
   private gpuRenderer?: WebGl2Renderer
   private _passthroughMask?: Float32Array
 
   // Two-loop state
   private _segLoopActive = false
-  private _latestMask: Float32Array | null = null
+  private _latestPair: FrameMaskPair | null = null
   private _renderLoopHandle: number | null = null
+  // Max allowed offset (in frames @ 30fps) between the frame that produced the
+  // mask and the frame the mask is applied to. 0 = strict frame-lock (no halo,
+  // ~inference-time latency). Higher = lower latency, halo bounded by N frames.
+  private _maxFrameOffset = 0
 
   virtualBackgroundImage?: HTMLImageElement
 
@@ -73,6 +107,16 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     this.name = opts.type === ProcessorType.VIRTUAL ? 'virtual' : 'blur'
     this.options = opts
     this.type = opts.type
+    this._maxFrameOffset = this._readMaxFrameOffset(opts)
+  }
+
+  private _readMaxFrameOffset(opts: ProcessorConfig): number {
+    if (opts.type === ProcessorType.BLUR || opts.type === ProcessorType.VIRTUAL) {
+      const v = opts.maxFrameOffset
+      if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) return 0
+      return Math.min(Math.floor(v), 60)
+    }
+    return 0
   }
 
   /** Resolves once the active segmenter is loaded and producing frames. */
@@ -195,6 +239,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     this.options = opts
     this.type = opts.type
     this.name = opts.type === ProcessorType.VIRTUAL ? 'virtual' : 'blur'
+    this._maxFrameOffset = this._readMaxFrameOffset(opts)
 
     if (!this.gpuRenderer) {
       console.info('[AMP] Update called in passthrough fallback mode; ignoring background processor updates.')
@@ -547,9 +592,12 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     this.segmentationMaskCanvas?.setAttribute('height', '' + this.processingHeight)
     this.gpuRenderer?.resizeProcessing(this.processingWidth, this.processingHeight)
     this._passthroughMask = undefined
-    // Invalidate stale mask from old dimensions — render loop falls back to
+    // Invalidate stale pair from old dimensions — render loop falls back to
     // passthrough until the segmenter produces a mask at the new size.
-    this._latestMask = null
+    if (this._latestPair) {
+      try { this._latestPair.source.close() } catch { /* ImageBitmap.close() — best-effort */ }
+      this._latestPair = null
+    }
   }
 
   private _initVirtualBackgroundImage() {
@@ -598,9 +646,10 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
   }
 
   /**
-   * Segmenter loop: runs at most 30fps, writes the latest alpha mask to
-   * _latestMask. Capped so it does not starve the render loop or saturate the
-   * GPU when inference is faster than one frame period.
+   * Segmenter loop: runs at most 50fps. Each iteration captures the current
+   * <video> frame as an ImageBitmap (GPU-backed snapshot), runs inference, and
+   * publishes the (mask, frame) pair atomically. The previous bitmap is closed
+   * to keep memory bounded to a single in-flight pair.
    */
   private async _runSegmenterLoop(): Promise<void> {
     const TARGET_MS = 1000 / 50
@@ -611,14 +660,43 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
         await new Promise<void>(r => setTimeout(r, TARGET_MS))
         continue
       }
+      let capturedSource: ImageBitmap | null = null
       try {
-        const cropBbox = this._preProcessingPipeline?.getNextCropBbox() ?? null
-        this.sizeSource(cropBbox)
+        // Atomic snapshot: a single sync drawImage(videoElement) defines the
+        // frame instant. Both the segmenter input (downsampled from this
+        // snapshot) and the renderer bitmap (createImageBitmap of this
+        // snapshot) are derived from the SAME static canvas, so the bitmap
+        // cannot drift to a newer frame while createImageBitmap awaits.
+        const snapshot = this._captureSnapshot()
+        if (!snapshot) {
+          await new Promise<void>(r => setTimeout(r, TARGET_MS))
+          continue
+        }
+        const motionRgba = this._preProcessingPipeline ? this._getMotionFrameRgba() ?? undefined : undefined
+        const cropBbox = this._preProcessingPipeline?.getNextCropBbox(
+          motionRgba,
+          AdvancedMattingProcessor.MOTION_W,
+          AdvancedMattingProcessor.MOTION_H
+        ) ?? null
+        this.sizeSource(snapshot, cropBbox)
+        // Pre-flip the bitmap on Y; the renderer disables UNPACK_FLIP_Y_WEBGL
+        // for ImageBitmap uploads. The flip is moved into the bitmap because
+        // UNPACK_FLIP_Y_WEBGL is unreliable for ImageBitmap across browsers.
+        capturedSource = await createImageBitmap(snapshot, {
+          imageOrientation: 'flipY',
+        })
+        if (!this._segLoopActive) {
+          capturedSource.close()
+          return
+        }
         const frameToSegment = this._preProcessingPipeline
           ? this._preProcessingPipeline.apply(this.sourceImageData!, this._lastMask)
           : this.sourceImageData!
         const rawMask = await seg.segment(frameToSegment, performance.now())
-        if (!this._segLoopActive) return
+        if (!this._segLoopActive) {
+          capturedSource.close()
+          return
+        }
         if (this.segmenter === seg) {
           const mask = this._preProcessingPipeline
             ? this._preProcessingPipeline.applyAfterInference(
@@ -629,9 +707,25 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
               )
             : rawMask
           this._lastMask = mask
-          this._latestMask = mask
+          const previous = this._latestPair
+          this._latestPair = {
+            mask,
+            source: capturedSource,
+            captureTime: t0,
+            procW: this.processingWidth,
+            procH: this.processingHeight,
+          }
+          capturedSource = null // ownership transferred to _latestPair
+          previous?.source.close()
+        } else {
+          capturedSource.close()
+          capturedSource = null
         }
       } catch (e) {
+        if (capturedSource) {
+          try { capturedSource.close() } catch { /* ImageBitmap.close() — best-effort */ }
+          capturedSource = null
+        }
         if (!this._segLoopActive) return
         console.error('[AMP] segmenter loop error', e)
         pushMattingError({
@@ -642,7 +736,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
         await new Promise<void>(r => setTimeout(r, 100))
         continue
       }
-      // Always yield to the event loop; sleep for whatever is left of 33ms.
+      // Always yield to the event loop; sleep for whatever is left of 20ms.
       // If inference took longer than one frame period, setTimeout(0) still
       // lets the browser process render callbacks and input before looping.
       const elapsed = performance.now() - t0
@@ -673,11 +767,19 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
 
   private _renderFrame(): void {
     if (!this.gpuRenderer || !this.videoElement || this.videoElement.videoWidth === 0) return
-    const vw = this.videoElement.videoWidth
-    const vh = this.videoElement.videoHeight
-    if (vw !== this.gpuRenderer.outW || vh !== this.gpuRenderer.outH) {
-      this.gpuRenderer.resizeOutput(vw, vh)
+    const pair = this._latestPair
+    if (!pair) {
+      // First mask not ready yet — passthrough with a uniform-1 mask; no halo
+      // to worry about since the mask is constant.
+      const vw = this.videoElement.videoWidth
+      const vh = this.videoElement.videoHeight
+      if (vw !== this.gpuRenderer.outW || vh !== this.gpuRenderer.outH) {
+        this.gpuRenderer.resizeOutput(vw, vh)
+      }
+      this._drawPassthrough()
+      return
     }
+<<<<<<< HEAD
     const mask = this._latestMask
     if (mask) {
       this.gpuRenderer.uploadMask(
@@ -686,23 +788,59 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
         this.processingHeight,
         this.segmenter?.needsMaskInversion ?? false
       )
+=======
+    this.gpuRenderer.uploadMask(pair.mask, pair.procW, pair.procH)
+
+    // Decide whether to apply the mask to the live <video> frame (low latency,
+    // up to maxFrameOffset frames of halo) or to the captured frame the mask
+    // was computed from (frame-locked, zero halo, ~inference-time latency).
+    // 1 "frame" ≈ 1000/30 ms (UI convention; actual camera framerate may differ).
+    const FRAME_MS = 1000 / 30
+    const maxAgeMs = this._maxFrameOffset * FRAME_MS
+    const ageMs = performance.now() - pair.captureTime
+    const useLive = this._maxFrameOffset > 0 && ageMs <= maxAgeMs
+
+    if (useLive) {
+      const vw = this.videoElement.videoWidth
+      const vh = this.videoElement.videoHeight
+      if (vw !== this.gpuRenderer.outW || vh !== this.gpuRenderer.outH) {
+        this.gpuRenderer.resizeOutput(vw, vh)
+      }
+>>>>>>> e9188d798feb893d5107ff7b95c7d7e3677f9f1d
       this.gpuRenderer.render(this.videoElement)
     } else {
-      this._drawPassthrough()
+      const sw = pair.source.width
+      const sh = pair.source.height
+      if (sw !== this.gpuRenderer.outW || sh !== this.gpuRenderer.outH) {
+        this.gpuRenderer.resizeOutput(sw, sh)
+      }
+      this.gpuRenderer.render(pair.source)
     }
   }
 
   // ────────────────────────────────────────────────────────────────────────────
 
-  private sizeSource(cropBbox?: BBox | null) {
-    const vw = this.videoElement!.videoWidth
-    const vh = this.videoElement!.videoHeight
+  /**
+   * Downsample a source image (canvas or video) into the proc-res segmentation
+   * canvas and read it back as ImageData. The source's natural dimensions are
+   * read from `width`/`height` (canvas) or `videoWidth`/`videoHeight` (video).
+   */
+  private sizeSource(
+    source: HTMLCanvasElement | HTMLVideoElement,
+    cropBbox?: BBox | null
+  ) {
+    const vw =
+      (source as HTMLVideoElement).videoWidth ??
+      (source as HTMLCanvasElement).width
+    const vh =
+      (source as HTMLVideoElement).videoHeight ??
+      (source as HTMLCanvasElement).height
     const sx = cropBbox ? Math.round(cropBbox.x * vw) : 0
     const sy = cropBbox ? Math.round(cropBbox.y * vh) : 0
     const sw = cropBbox ? Math.round(cropBbox.width * vw) : vw
     const sh = cropBbox ? Math.round(cropBbox.height * vh) : vh
     this.segmentationMaskCanvasCtx!.drawImage(
-      this.videoElement!,
+      source,
       sx, sy, sw, sh,
       0, 0, this.processingWidth, this.processingHeight
     )
@@ -712,6 +850,50 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       this.processingWidth,
       this.processingHeight
     )
+  }
+
+  /**
+   * Ensures the snapshot canvas exists and matches the current video size,
+   * then draws the current video frame into it. Synchronous → defines the
+   * atomic instant from which the segmenter input and the renderer bitmap
+   * are both derived.
+   */
+  private _captureSnapshot(): HTMLCanvasElement | null {
+    if (!this.videoElement || this.videoElement.videoWidth === 0) return null
+    const vw = this.videoElement.videoWidth
+    const vh = this.videoElement.videoHeight
+    if (
+      !this._snapshotCanvas ||
+      this._snapshotCanvas.width !== vw ||
+      this._snapshotCanvas.height !== vh
+    ) {
+      const canvas = this._snapshotCanvas ?? document.createElement('canvas')
+      canvas.width = vw
+      canvas.height = vh
+      this._snapshotCanvas = canvas
+      this._snapshotCanvasCtx = canvas.getContext('2d', {
+        willReadFrequently: false,
+      }) as CanvasRenderingContext2D
+    }
+    this._snapshotCanvasCtx!.drawImage(this.videoElement, 0, 0, vw, vh)
+    return this._snapshotCanvas
+  }
+
+  private _getMotionFrameRgba(): Uint8ClampedArray | null {
+    if (!this._snapshotCanvas) return null
+    const mw = AdvancedMattingProcessor.MOTION_W
+    const mh = AdvancedMattingProcessor.MOTION_H
+    if (!this._motionCanvas) {
+      const canvas = document.createElement('canvas')
+      canvas.width = mw
+      canvas.height = mh
+      this._motionCanvas = canvas
+      this._motionCanvasCtx = canvas.getContext('2d', {
+        willReadFrequently: true,
+      }) as CanvasRenderingContext2D
+    }
+    this._motionCanvasCtx!.drawImage(this._snapshotCanvas, 0, 0, mw, mh)
+    return this._motionCanvasCtx!.getImageData(0, 0, mw, mh).data
   }
 
   private _drawPassthrough() {
@@ -786,7 +968,12 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     this.gpuRenderer = undefined
     this._preProcessingPipeline = undefined
     this._lastMask = undefined
-    this._latestMask = null
+    this._motionCanvas = undefined
+    this._motionCanvasCtx = undefined
+    if (this._latestPair) {
+      try { this._latestPair.source.close() } catch { /* ImageBitmap.close() — best-effort */ }
+      this._latestPair = null
+    }
     this._resolveReady()
 
     if (this.processedTrack && this.processedTrack !== this.source) {
