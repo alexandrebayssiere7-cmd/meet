@@ -15,6 +15,10 @@ const MODEL_URL =
 export class LandscapeSegmenter implements Segmenter {
   readonly inputSize = { width: 256, height: 144 }
   private imageSegmenter?: ImageSegmenter
+  // Reusable output buffer — avoids allocating a new Float32Array every frame.
+  // MediaPipe recycles its internal buffer, so a copy is mandatory, but we
+  // can reuse the same destination across frames.
+  private _maskBuffer?: Float32Array
 
   async init() {
     try {
@@ -54,8 +58,13 @@ export class LandscapeSegmenter implements Segmenter {
           // directly — NOT background. Unlike multiclass (where class 0 = background),
           // the binary landscape model emits a single mask where high value = person.
           const fg = result.confidenceMasks![0].getAsFloat32Array()
-          // Copy: getAsFloat32Array() may return a view into a MediaPipe-managed buffer.
-          resolve(fg.slice())
+          // Copy into reusable buffer: getAsFloat32Array() returns a view into
+          // a MediaPipe-managed buffer that gets recycled on the next call.
+          if (!this._maskBuffer || this._maskBuffer.length !== fg.length) {
+            this._maskBuffer = new Float32Array(fg.length)
+          }
+          this._maskBuffer.set(fg)
+          resolve(this._maskBuffer)
         }
       )
     })

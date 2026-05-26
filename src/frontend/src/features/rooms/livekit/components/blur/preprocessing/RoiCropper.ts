@@ -3,6 +3,10 @@ const DEAD_ZONE_SIZE = 0.015
 const SMOOTHING = 0.5
 const BBOX_PADDING = 0.05
 const MASK_THRESHOLD = 0.5
+const MOTION_DIFF_THRESHOLD = 25
+const MOTION_PIXEL_RATIO = 1 / 16
+const MOTION_CHECK_INTERVAL = 30
+const EXPANSION_COOLDOWN_FRAMES = 30
 
 export interface BBox {
   x: number      // normalised left edge [0, 1]
@@ -78,15 +82,15 @@ export function stabilizeBbox(current: BBox, next: BBox): BBox {
   }
 }
 
-/** Bilinear resize of a Float32 single-channel image. */
-function resizeFloat32(
+/** Bilinear resize of a Float32 single-channel image into a pre-allocated destination. */
+function resizeFloat32Into(
   src: Float32Array,
   srcW: number,
   srcH: number,
+  dst: Float32Array,
   dstW: number,
   dstH: number
-): Float32Array {
-  const dst = new Float32Array(dstW * dstH)
+): void {
   const scaleX = srcW / dstW
   const scaleY = srcH / dstH
 
@@ -111,7 +115,6 @@ function resizeFloat32(
       dst[dy * dstW + dx] = v
     }
   }
-  return dst
 }
 
 /**
@@ -127,14 +130,82 @@ export class RoiCropper {
   private currentBbox: BBox = { ...FULL_FRAME }
   private hasMask = false
   private frameCounter = 0
+  private prevLuma: Uint8Array | null = null
+  private cooldownFrames = 0
+
+  // Reusable buffers — avoids per-frame Float32Array allocations in remapMask/resizeFloat32.
+  private _resizeBuf: Float32Array | null = null
+  private _fullBuf: Float32Array | null = null
 
   /** Returns the stabilised bbox to use when extracting the model input for this frame. */
-  getNextCropBbox(): BBox {
+  getNextCropBbox(
+    currentRgba?: Uint8ClampedArray,
+    rgbaW?: number,
+    rgbaH?: number
+  ): BBox {
     this.frameCounter++
-    if (this.frameCounter % 45 === 0) {
-      return { ...FULL_FRAME }
+
+    if (this.cooldownFrames > 0) {
+      this.cooldownFrames--
+      return { ...this.currentBbox }
     }
-    return this.currentBbox
+
+    if (this.frameCounter % MOTION_CHECK_INTERVAL === 0) {
+      const motionDetected =
+        !!currentRgba && !!rgbaW && !!rgbaH && !!this.prevLuma &&
+        this._hasMotionOutsideBbox(currentRgba, rgbaW, rgbaH, this.currentBbox)
+      this._updatePrevLuma(currentRgba, rgbaW, rgbaH)
+      if (motionDetected) {
+        this.currentBbox = { ...FULL_FRAME }
+        this.cooldownFrames = EXPANSION_COOLDOWN_FRAMES
+        return { ...FULL_FRAME }
+      }
+    }
+
+    return { ...this.currentBbox }
+  }
+
+  private _hasMotionOutsideBbox(
+    rgba: Uint8ClampedArray,
+    w: number,
+    h: number,
+    bbox: BBox
+  ): boolean {
+    const bboxX0 = Math.floor(bbox.x * w)
+    const bboxY0 = Math.floor(bbox.y * h)
+    const bboxX1 = Math.ceil((bbox.x + bbox.width) * w)
+    const bboxY1 = Math.ceil((bbox.y + bbox.height) * h)
+    const prev = this.prevLuma!
+    let changedPixels = 0
+
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (x >= bboxX0 && x < bboxX1 && y >= bboxY0 && y < bboxY1) continue
+        const i = (y * w + x) * 4
+        const luma = (rgba[i] + rgba[i + 1] + rgba[i + 2]) / 3
+        if (Math.abs(luma - prev[y * w + x]) > MOTION_DIFF_THRESHOLD) {
+          changedPixels++
+        }
+      }
+    }
+
+    return changedPixels / (w * h) > MOTION_PIXEL_RATIO
+  }
+
+  private _updatePrevLuma(
+    rgba?: Uint8ClampedArray,
+    w?: number,
+    h?: number
+  ): void {
+    if (!rgba || !w || !h) return
+    const n = w * h
+    if (!this.prevLuma || this.prevLuma.length !== n) {
+      this.prevLuma = new Uint8Array(n)
+    }
+    for (let i = 0; i < n; i++) {
+      const j = i * 4
+      this.prevLuma[i] = (rgba[j] + rgba[j + 1] + rgba[j + 2]) / 3
+    }
   }
 
   /**
@@ -150,7 +221,12 @@ export class RoiCropper {
     fullW: number,
     fullH: number
   ): Float32Array {
-    const full = new Float32Array(fullW * fullH)
+    const fullLen = fullW * fullH
+    if (!this._fullBuf || this._fullBuf.length !== fullLen) {
+      this._fullBuf = new Float32Array(fullLen)
+    }
+    const full = this._fullBuf
+    full.fill(0)
 
     const dstX = Math.round(usedBbox.x * fullW)
     const dstY = Math.round(usedBbox.y * fullH)
@@ -159,7 +235,11 @@ export class RoiCropper {
 
     if (dstW <= 0 || dstH <= 0) return full
 
-    const resized = resizeFloat32(cropMask, cropMaskW, cropMaskH, dstW, dstH)
+    const resizeLen = dstW * dstH
+    if (!this._resizeBuf || this._resizeBuf.length !== resizeLen) {
+      this._resizeBuf = new Float32Array(resizeLen)
+    }
+    resizeFloat32Into(cropMask, cropMaskW, cropMaskH, this._resizeBuf, dstW, dstH)
 
     for (let y = 0; y < dstH; y++) {
       const fy = dstY + y
@@ -167,7 +247,7 @@ export class RoiCropper {
       for (let x = 0; x < dstW; x++) {
         const fx = dstX + x
         if (fx < 0 || fx >= fullW) continue
-        full[fy * fullW + fx] = resized[y * dstW + x]
+        full[fy * fullW + fx] = this._resizeBuf[y * dstW + x]
       }
     }
 
@@ -189,6 +269,10 @@ export class RoiCropper {
     this.currentBbox = { ...FULL_FRAME }
     this.hasMask = false
     this.frameCounter = 0
+    this.prevLuma = null
+    this.cooldownFrames = 0
+    this._resizeBuf = null
+    this._fullBuf = null
   }
 
   getCurrentBbox(): BBox {

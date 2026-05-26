@@ -144,6 +144,11 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
   private _snapshotCanvas?: HTMLCanvasElement
   private _snapshotCanvasCtx?: CanvasRenderingContext2D
 
+  private _motionCanvas?: HTMLCanvasElement
+  private _motionCanvasCtx?: CanvasRenderingContext2D
+  private static readonly MOTION_W = 128
+  private static readonly MOTION_H = 72
+
   segmenter?: Segmenter
   private gpuRenderer?: WebGl2Renderer
   private _passthroughMask?: Float32Array
@@ -326,7 +331,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
         if (this.processedTrack && this.processedTrack !== this.source) {
           try {
             this.processedTrack.stop()
-          } catch {}
+          } catch { }
         }
         this.processedTrack = undefined
         return
@@ -1012,7 +1017,6 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       }
       let capturedSource: ImageBitmap | null = null
       try {
-        const cropBbox = this._preProcessingPipeline?.getNextCropBbox() ?? null
         // Atomic snapshot: a single sync drawImage(videoElement) defines the
         // frame instant. Both the segmenter input (downsampled from this
         // snapshot) and the renderer bitmap (createImageBitmap of this
@@ -1026,6 +1030,12 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
         // Record the camera shutter time for this snapshot, derived from the
         // last rVFC tick. Fallback: the snapshot wall-clock t0.
         const cameraCaptureTime = this._latestVideoFrameMeta?.captureTime ?? t0
+        const motionRgba = this._preProcessingPipeline ? this._getMotionFrameRgba() ?? undefined : undefined
+        const cropBbox = this._preProcessingPipeline?.getNextCropBbox(
+          motionRgba,
+          AdvancedMattingProcessor.MOTION_W,
+          AdvancedMattingProcessor.MOTION_H
+        ) ?? null
         this.sizeSource(snapshot, cropBbox)
         // Pre-flip the bitmap on Y; the renderer disables UNPACK_FLIP_Y_WEBGL
         // for ImageBitmap uploads. The flip is moved into the bitmap because
@@ -1051,11 +1061,11 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
         if (this.segmenter === seg) {
           const mask = this._preProcessingPipeline
             ? this._preProcessingPipeline.applyAfterInference(
-                rawMask,
-                this.processingWidth,
-                this.processingHeight,
-                cropBbox
-              )
+              rawMask,
+              this.processingWidth,
+              this.processingHeight,
+              cropBbox
+            )
             : rawMask
           this._lastMask = mask
           const previous = this._latestPair
@@ -1354,6 +1364,23 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     return this._snapshotCanvas
   }
 
+  private _getMotionFrameRgba(): Uint8ClampedArray | null {
+    if (!this._snapshotCanvas) return null
+    const mw = AdvancedMattingProcessor.MOTION_W
+    const mh = AdvancedMattingProcessor.MOTION_H
+    if (!this._motionCanvas) {
+      const canvas = document.createElement('canvas')
+      canvas.width = mw
+      canvas.height = mh
+      this._motionCanvas = canvas
+      this._motionCanvasCtx = canvas.getContext('2d', {
+        willReadFrequently: true,
+      }) as CanvasRenderingContext2D
+    }
+    this._motionCanvasCtx!.drawImage(this._snapshotCanvas, 0, 0, mw, mh)
+    return this._motionCanvasCtx!.getImageData(0, 0, mw, mh).data
+  }
+
   private _drawPassthrough() {
     if (!this.gpuRenderer || !this.videoElement) return
     const w = this.processingWidth
@@ -1434,6 +1461,8 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     this.gpuRenderer = undefined
     this._preProcessingPipeline = undefined
     this._lastMask = undefined
+    this._motionCanvas = undefined
+    this._motionCanvasCtx = undefined
     if (this._latestPair) {
       try { this._latestPair.source.close() } catch { /* ImageBitmap.close() — best-effort */ }
       this._latestPair = null
