@@ -278,7 +278,9 @@
         "title": "Nachbearbeitung",
         "sigmoid": "Sigmoid",
         "erosion": "Kantenerosion",
-        "ema": "EMA"
+        "ema": "EMA",
+        "opening": "Erosion-Dilation (Öffnung)",
+        "closing": "Dilation-Erosion (Schließung)"
       },
       "upsampling": {
         "title": "Hochskalierung",
@@ -289,6 +291,8 @@
         "sigmoidThreshold": "Sigmoid-Schwelle",
         "erosionPixels": "Entfernte Pixel (Kanten)",
         "emaAlpha": "Reaktivität (EMA)",
+        "openingRadius": "Öffnungsradius (px)",
+        "closingRadius": "Schließungsradius (px)",
         "blurRadius": "Unschärfe-Intensität",
         "upsamplingRadius": "Radius (Guided Filter)",
         "upsamplingEps": "Regularisierung (Guided Filter)",

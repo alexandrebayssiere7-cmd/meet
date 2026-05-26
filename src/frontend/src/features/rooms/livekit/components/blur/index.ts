@@ -20,6 +20,7 @@ export type MorphologyOp = 'erosion' | 'dilation' | 'opening' | 'closing'
 export type PostProcessingConfig = {
   sigmoid?: { steepness: number; threshold: number }
   erosion?: { pixels: number }
+  opening?: { radius: number }
   closing?: { radius: number }
   ema?: { alpha: number }
 }

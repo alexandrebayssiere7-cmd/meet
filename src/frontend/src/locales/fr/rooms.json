@@ -278,7 +278,9 @@
         "title": "Post-traitement",
         "sigmoid": "Sigmoid",
         "erosion": "Érosion des bords",
-        "ema": "EMA"
+        "ema": "EMA",
+        "opening": "Érosion-Dilatation (ouverture)",
+        "closing": "Dilatation-Érosion (fermeture)"
       },
       "upsampling": {
         "title": "Suréchantillonnage",
@@ -289,6 +291,8 @@
         "sigmoidThreshold": "Seuil sigmoid",
         "erosionPixels": "Pixels supprimés (bords)",
         "emaAlpha": "Réactivité (EMA)",
+        "openingRadius": "Rayon ouverture (px)",
+        "closingRadius": "Rayon fermeture (px)",
         "blurRadius": "Intensité du flou",
         "upsamplingRadius": "Rayon (Guided Filter)",
         "upsamplingEps": "Régularisation (Guided Filter)",

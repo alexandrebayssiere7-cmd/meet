@@ -599,7 +599,16 @@ export class WebGl2Renderer implements GpuRenderer {
       advance()
     }
 
-    // Closing (Dilation then Erosion to fill holes)
+    // Opening (Erosion then Dilation — removes small isolated specks at mask edges)
+    if (this.postCfg.opening && this.postCfg.opening.radius > 0) {
+      const r = this.postCfg.opening.radius
+      this._applyMorphology(dstFbo, src, -r) // Erosion
+      advance()
+      this._applyMorphology(dstFbo, src, r) // Dilation
+      advance()
+    }
+
+    // Closing (Dilation then Erosion — fills small holes inside the mask)
     if (this.postCfg.closing && this.postCfg.closing.radius > 0) {
       const r = this.postCfg.closing.radius
       this._applyMorphology(dstFbo, src, r) // Dilation

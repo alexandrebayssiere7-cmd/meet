@@ -43,8 +43,8 @@ import { useMattingStats } from '../blur/stats/MattingStatsStore'
 
 enum BlurRadius {
   NONE = 0,
-  LIGHT = 5,
-  NORMAL = 10,
+  LIGHT = 10,
+  NORMAL = 50,
 }
 
 const isSupported = BackgroundProcessorFactory.isSupported()
@@ -370,6 +370,10 @@ export const EffectsConfiguration = ({
   const [emaAlpha, setEmaAlpha] = useState<number>(
     initialPP.ema?.alpha ?? 0.5
   )
+  const [openingEnabled, setOpeningEnabled] = useState(!!initialPP.opening)
+  const [openingRadius, setOpeningRadius] = useState<number>(
+    initialPP.opening?.radius ?? 0
+  )
   const [closingEnabled, setClosingEnabled] = useState(!!initialPP.closing)
   const [closingRadius, setClosingRadius] = useState<number>(
     initialPP.closing?.radius ?? 0
@@ -413,7 +417,8 @@ export const EffectsConfiguration = ({
     if (erosionEnabled && erosionPixels > 0)
       cfg.erosion = { pixels: erosionPixels }
     if (emaEnabled) cfg.ema = { alpha: emaAlpha }
-    if (closingEnabled) cfg.closing = { radius: closingRadius }
+    if (openingEnabled && openingRadius > 0) cfg.opening = { radius: openingRadius }
+    if (closingEnabled && closingRadius > 0) cfg.closing = { radius: closingRadius }
     return cfg
   }, [
     sigmoidEnabled,
@@ -423,6 +428,8 @@ export const EffectsConfiguration = ({
     erosionPixels,
     emaEnabled,
     emaAlpha,
+    openingEnabled,
+    openingRadius,
     closingEnabled,
     closingRadius,
   ])
@@ -1695,13 +1702,38 @@ export const EffectsConfiguration = ({
                   >
                     <input
                       type="checkbox"
+                      checked={openingEnabled}
+                      onChange={(e) => setOpeningEnabled(e.target.checked)}
+                    />
+                    <Text variant="sm">{t('advanced.postProcessing.opening')}</Text>
+                  </label>
+                  <SliderRow
+                    label={t('advanced.params.openingRadius')}
+                    displayValue={`${openingRadius} px`}
+                    value={openingRadius}
+                    min={0}
+                    max={8}
+                    step={1}
+                    disabled={!openingEnabled}
+                    onChange={setOpeningRadius}
+                  />
+                  <label
+                    className={css({
+                      display: 'flex',
+                      gap: '0.4rem',
+                      alignItems: 'center',
+                      cursor: 'pointer',
+                    })}
+                  >
+                    <input
+                      type="checkbox"
                       checked={closingEnabled}
                       onChange={(e) => setClosingEnabled(e.target.checked)}
                     />
-                    <Text variant="sm">{t('advanced.postProcessing.holeFilling')}</Text>
+                    <Text variant="sm">{t('advanced.postProcessing.closing')}</Text>
                   </label>
                   <SliderRow
-                    label={t('advanced.params.holeFillingRadius')}
+                    label={t('advanced.params.closingRadius')}
                     displayValue={`${closingRadius} px`}
                     value={closingRadius}
                     min={0}

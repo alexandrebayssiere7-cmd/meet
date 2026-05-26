@@ -278,7 +278,9 @@
         "title": "Nabewerking",
         "sigmoid": "Sigmoid",
         "erosion": "Randerosie",
-        "ema": "EMA"
+        "ema": "EMA",
+        "opening": "Erosie-Dilatatie (opening)",
+        "closing": "Dilatatie-Erosie (sluiting)"
       },
       "upsampling": {
         "title": "Opschaling",
@@ -289,6 +291,8 @@
         "sigmoidThreshold": "Sigmoid drempel",
         "erosionPixels": "Verwijderde pixels (randen)",
         "emaAlpha": "Reactiviteit (EMA)",
+        "openingRadius": "Openingsstraal (px)",
+        "closingRadius": "Sluitingsstraal (px)",
         "blurRadius": "Vervaging-intensiteit",
         "upsamplingRadius": "Straal (Guided Filter)",
         "upsamplingEps": "Regularisatie (Guided Filter)",
