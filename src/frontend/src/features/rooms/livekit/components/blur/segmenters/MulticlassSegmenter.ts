@@ -1,7 +1,4 @@
-import {
-  ImageSegmenter,
-  ImageSegmenterResult,
-} from '@mediapipe/tasks-vision'
+import { ImageSegmenter, ImageSegmenterResult } from '@mediapipe/tasks-vision'
 import {
   Segmenter,
   getMediapipeFileset,

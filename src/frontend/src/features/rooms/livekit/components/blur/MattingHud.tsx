@@ -4,11 +4,16 @@ import { useMattingStats } from './stats/MattingStatsStore'
 
 const shortModel = (m: SegmentationModel | null): string => {
   switch (m) {
-    case SegmentationModel.LANDSCAPE: return 'LS'
-    case SegmentationModel.MULTICLASS: return 'MC'
-    case SegmentationModel.RVM: return 'RVM'
-    case SegmentationModel.AUTO: return 'AUTO'
-    default: return '—'
+    case SegmentationModel.LANDSCAPE:
+      return 'LS'
+    case SegmentationModel.MULTICLASS:
+      return 'MC'
+    case SegmentationModel.RVM:
+      return 'RVM'
+    case SegmentationModel.AUTO:
+      return 'AUTO'
+    default:
+      return '—'
   }
 }
 
@@ -70,7 +75,8 @@ export const MattingHud = ({ alwaysVisible = false }: MattingHudProps) => {
       <div>Δ {stats.maskFrameGapMs.toFixed(0)}ms</div>
       <div>inf {stats.segmenterInferenceMs.toFixed(0)}ms</div>
       <div>
-        cam {stats.cameraFps.toFixed(0)} · r {stats.renderFps.toFixed(0)} · s {stats.segmenterFps.toFixed(0)} fps
+        cam {stats.cameraFps.toFixed(0)} · r {stats.renderFps.toFixed(0)} · s{' '}
+        {stats.segmenterFps.toFixed(0)} fps
       </div>
       {stats.effectiveLatencyMode !== null && (
         <div>

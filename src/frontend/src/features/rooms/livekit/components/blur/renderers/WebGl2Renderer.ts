@@ -119,18 +119,68 @@ export class WebGl2Renderer implements GpuRenderer {
   // Cached uniform locations — resolved once in _buildPrograms(), reused every frame.
   // Eliminates ~43 string-lookup driver calls per frame.
   private uLoc!: {
-    sigmoid:    { uTex: WebGLUniformLocation | null; uSteepness: WebGLUniformLocation | null; uThreshold: WebGLUniformLocation | null }
-    ema:        { uTex: WebGLUniformLocation | null; uPrev: WebGLUniformLocation | null; uAlpha: WebGLUniformLocation | null }
-    copyR:      { uTex: WebGLUniformLocation | null }
-    morphology: { uTex: WebGLUniformLocation | null; uRadius: WebGLUniformLocation | null; uTexel: WebGLUniformLocation | null }
-    maskedDown: { uFrame: WebGLUniformLocation | null; uMask: WebGLUniformLocation | null; uSourceTexelSize: WebGLUniformLocation | null }
-    blur:       { uImage: WebGLUniformLocation | null; uMask: WebGLUniformLocation | null; uDirection: WebGLUniformLocation | null; uTexelSize: WebGLUniformLocation | null; uRadius: WebGLUniformLocation | null }
-    composite:  { uVideo: WebGLUniformLocation | null; uBg: WebGLUniformLocation | null; uMask: WebGLUniformLocation | null; uErosionRadius: WebGLUniformLocation | null; uOutTexel: WebGLUniformLocation | null }
-    segmo:      { uVideo: WebGLUniformLocation | null; uBg: WebGLUniformLocation | null; uMask: WebGLUniformLocation | null; uOutTexel: WebGLUniformLocation | null }
-    feather:    { uMask: WebGLUniformLocation | null; uTexel: WebGLUniformLocation | null; uRadius: WebGLUniformLocation | null }
-    lightWrap:  { uComposite: WebGLUniformLocation | null; uBg: WebGLUniformLocation | null; uMask: WebGLUniformLocation | null; uStrength: WebGLUniformLocation | null }
-    maskedFg:   { uVideo: WebGLUniformLocation | null; uMask: WebGLUniformLocation | null }
-    fgCast:     { uVideo: WebGLUniformLocation | null; uFgMasked: WebGLUniformLocation | null; uBg: WebGLUniformLocation | null; uStrength: WebGLUniformLocation | null }
+    sigmoid: {
+      uTex: WebGLUniformLocation | null
+      uSteepness: WebGLUniformLocation | null
+      uThreshold: WebGLUniformLocation | null
+    }
+    ema: {
+      uTex: WebGLUniformLocation | null
+      uPrev: WebGLUniformLocation | null
+      uAlpha: WebGLUniformLocation | null
+    }
+    copyR: { uTex: WebGLUniformLocation | null }
+    morphology: {
+      uTex: WebGLUniformLocation | null
+      uRadius: WebGLUniformLocation | null
+      uTexel: WebGLUniformLocation | null
+    }
+    maskedDown: {
+      uFrame: WebGLUniformLocation | null
+      uMask: WebGLUniformLocation | null
+      uSourceTexelSize: WebGLUniformLocation | null
+    }
+    blur: {
+      uImage: WebGLUniformLocation | null
+      uMask: WebGLUniformLocation | null
+      uDirection: WebGLUniformLocation | null
+      uTexelSize: WebGLUniformLocation | null
+      uRadius: WebGLUniformLocation | null
+    }
+    composite: {
+      uVideo: WebGLUniformLocation | null
+      uBg: WebGLUniformLocation | null
+      uMask: WebGLUniformLocation | null
+      uErosionRadius: WebGLUniformLocation | null
+      uOutTexel: WebGLUniformLocation | null
+    }
+    segmo: {
+      uVideo: WebGLUniformLocation | null
+      uBg: WebGLUniformLocation | null
+      uMask: WebGLUniformLocation | null
+      uOutTexel: WebGLUniformLocation | null
+    }
+    feather: {
+      uMask: WebGLUniformLocation | null
+      uTexel: WebGLUniformLocation | null
+      uRadius: WebGLUniformLocation | null
+    }
+    lightWrap: {
+      uComposite: WebGLUniformLocation | null
+      uBg: WebGLUniformLocation | null
+      uMask: WebGLUniformLocation | null
+      uStrength: WebGLUniformLocation | null
+    }
+    maskedFg: {
+      uVideo: WebGLUniformLocation | null
+      uMask: WebGLUniformLocation | null
+    }
+    fgCast: {
+      uVideo: WebGLUniformLocation | null
+      uFgMasked: WebGLUniformLocation | null
+      uBg: WebGLUniformLocation | null
+      uStrength: WebGLUniformLocation | null
+    }
   }
 
   async init(canvas: HTMLCanvasElement, opts: GpuRendererInitOpts) {
@@ -192,12 +242,7 @@ export class WebGl2Renderer implements GpuRenderer {
     this.procH = h
     const gl = this.gl
     // Reallocate proc-sized textures (rawMask, maskA, maskB, ema)
-    for (const tex of [
-      this.rawMaskTex,
-      this.maskA,
-      this.maskB,
-      this.emaTex,
-    ]) {
+    for (const tex of [this.rawMaskTex, this.maskA, this.maskB, this.emaTex]) {
       gl.bindTexture(gl.TEXTURE_2D, tex)
       gl.texImage2D(
         gl.TEXTURE_2D,
@@ -227,25 +272,75 @@ export class WebGl2Renderer implements GpuRenderer {
     // 1. Reallocate videoTex (and the optional liveVideoTex) at new size
     if (this.videoTex) {
       gl.bindTexture(gl.TEXTURE_2D, this.videoTex)
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA,
+        w,
+        h,
+        0,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        null
+      )
     }
     if (this.liveVideoTex) {
       gl.bindTexture(gl.TEXTURE_2D, this.liveVideoTex)
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA,
+        w,
+        h,
+        0,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        null
+      )
     }
 
     // 2. Reallocate half-res textures
     if (this.bgDownTex) {
       gl.bindTexture(gl.TEXTURE_2D, this.bgDownTex)
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, this.halfW, this.halfH, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA,
+        this.halfW,
+        this.halfH,
+        0,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        null
+      )
     }
     if (this.bgBlurPingTex) {
       gl.bindTexture(gl.TEXTURE_2D, this.bgBlurPingTex)
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, this.halfW, this.halfH, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA,
+        this.halfW,
+        this.halfH,
+        0,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        null
+      )
     }
     if (this.bgBlurPongTex) {
       gl.bindTexture(gl.TEXTURE_2D, this.bgBlurPongTex)
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, this.halfW, this.halfH, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA,
+        this.halfW,
+        this.halfH,
+        0,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        null
+      )
     }
 
     // 3. Clear lazily-allocated Segmo textures so they get recreated at the new size
@@ -312,17 +407,7 @@ export class WebGl2Renderer implements GpuRenderer {
     }
     const gl = this.gl
     gl.bindTexture(gl.TEXTURE_2D, this.rawMaskTex)
-    gl.texSubImage2D(
-      gl.TEXTURE_2D,
-      0,
-      0,
-      0,
-      w,
-      h,
-      gl.RED,
-      gl.UNSIGNED_BYTE,
-      u8
-    )
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, w, h, gl.RED, gl.UNSIGNED_BYTE, u8)
   }
 
   setVirtualBackground(img: HTMLImageElement | null) {
@@ -409,11 +494,22 @@ export class WebGl2Renderer implements GpuRenderer {
     // when uBlendT > 0). Allocated lazily on first use.
     const wantsBlend = this.blendMix > 0 && liveSource !== undefined
     if (wantsBlend) {
-      const liveIsVideo = (liveSource as HTMLVideoElement).videoWidth !== undefined
+      const liveIsVideo =
+        (liveSource as HTMLVideoElement).videoWidth !== undefined
       if (!this.liveVideoTex) {
         this.liveVideoTex = gl.createTexture()
         gl.bindTexture(gl.TEXTURE_2D, this.liveVideoTex)
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, this.outW, this.outH, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
+        gl.texImage2D(
+          gl.TEXTURE_2D,
+          0,
+          gl.RGBA,
+          this.outW,
+          this.outH,
+          0,
+          gl.RGBA,
+          gl.UNSIGNED_BYTE,
+          null
+        )
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
@@ -423,7 +519,14 @@ export class WebGl2Renderer implements GpuRenderer {
       gl.bindTexture(gl.TEXTURE_2D, this.liveVideoTex)
       if (!liveIsVideo) gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false)
       try {
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, liveSource!)
+        gl.texImage2D(
+          gl.TEXTURE_2D,
+          0,
+          gl.RGBA,
+          gl.RGBA,
+          gl.UNSIGNED_BYTE,
+          liveSource!
+        )
       } catch (e) {
         void e
       }
@@ -471,7 +574,10 @@ export class WebGl2Renderer implements GpuRenderer {
     // shader's mix() degenerates to a no-op. When blend is on, bind the live
     // source we uploaded above.
     gl.activeTexture(gl.TEXTURE3)
-    gl.bindTexture(gl.TEXTURE_2D, wantsBlend && this.liveVideoTex ? this.liveVideoTex : this.videoTex)
+    gl.bindTexture(
+      gl.TEXTURE_2D,
+      wantsBlend && this.liveVideoTex ? this.liveVideoTex : this.videoTex
+    )
     gl.uniform1i(gl.getUniformLocation(this.pComposite, 'uLiveVideo'), 3)
     gl.uniform1f(
       gl.getUniformLocation(this.pComposite, 'uBlendT'),
@@ -486,11 +592,7 @@ export class WebGl2Renderer implements GpuRenderer {
       this.uLoc.composite.uErosionRadius,
       this.postCfg.erosion?.pixels ?? 0
     )
-    gl.uniform2f(
-      this.uLoc.composite.uOutTexel,
-      1 / this.outW,
-      1 / this.outH
-    )
+    gl.uniform2f(this.uLoc.composite.uOutTexel, 1 / this.outW, 1 / this.outH)
     this._drawQuad()
 
     gl.flush()
@@ -522,7 +624,7 @@ export class WebGl2Renderer implements GpuRenderer {
       }
     }
     const radius = this.upsamplingCfg.radius ?? 8
-    const eps    = this.upsamplingCfg.eps    ?? 0.01
+    const eps = this.upsamplingCfg.eps ?? 0.01
     return this.gf.run(this.videoTex, procMaskTex, radius, eps, this.vao)
   }
 
@@ -663,7 +765,11 @@ export class WebGl2Renderer implements GpuRenderer {
     return src
   }
 
-  private _applyMorphology(fbo: WebGLFramebuffer, src: WebGLTexture, radius: number) {
+  private _applyMorphology(
+    fbo: WebGLFramebuffer,
+    src: WebGLTexture,
+    radius: number
+  ) {
     const gl = this.gl
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo)
     gl.useProgram(this.pMorphology)
@@ -695,26 +801,10 @@ export class WebGl2Renderer implements GpuRenderer {
             gl.UNSIGNED_BYTE,
             img
           )
-          gl.texParameteri(
-            gl.TEXTURE_2D,
-            gl.TEXTURE_MIN_FILTER,
-            gl.LINEAR
-          )
-          gl.texParameteri(
-            gl.TEXTURE_2D,
-            gl.TEXTURE_MAG_FILTER,
-            gl.LINEAR
-          )
-          gl.texParameteri(
-            gl.TEXTURE_2D,
-            gl.TEXTURE_WRAP_S,
-            gl.CLAMP_TO_EDGE
-          )
-          gl.texParameteri(
-            gl.TEXTURE_2D,
-            gl.TEXTURE_WRAP_T,
-            gl.CLAMP_TO_EDGE
-          )
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
           this.virtualImgUploaded = true
         }
       }
@@ -739,7 +829,11 @@ export class WebGl2Renderer implements GpuRenderer {
     gl.activeTexture(gl.TEXTURE1)
     gl.bindTexture(gl.TEXTURE_2D, maskTex)
     gl.uniform1i(this.uLoc.maskedDown.uMask, 1)
-    gl.uniform2f(this.uLoc.maskedDown.uSourceTexelSize, 1.0 / this.outW, 1.0 / this.outH)
+    gl.uniform2f(
+      this.uLoc.maskedDown.uSourceTexelSize,
+      1.0 / this.outW,
+      1.0 / this.outH
+    )
     this._drawQuad()
 
     // Stage 2: horizontal mask-weighted gaussian.
@@ -787,15 +881,21 @@ export class WebGl2Renderer implements GpuRenderer {
    * postprocess chain (sigmoid/morphology/EMA/guided-upsample) ran upstream and
    * is unaffected.
    */
-  private _segmoLogged = false
   private _ensureSegmoFeatherTarget() {
     if (this.segmoFeatheredMaskTex && this.fboSegmoFeatheredMask) return
     const gl = this.gl
     const t = gl.createTexture()!
     gl.bindTexture(gl.TEXTURE_2D, t)
     gl.texImage2D(
-      gl.TEXTURE_2D, 0, gl.R8, this.outW, this.outH, 0,
-      gl.RED, gl.UNSIGNED_BYTE, null
+      gl.TEXTURE_2D,
+      0,
+      gl.R8,
+      this.outW,
+      this.outH,
+      0,
+      gl.RED,
+      gl.UNSIGNED_BYTE,
+      null
     )
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
@@ -804,7 +904,11 @@ export class WebGl2Renderer implements GpuRenderer {
     const f = gl.createFramebuffer()!
     gl.bindFramebuffer(gl.FRAMEBUFFER, f)
     gl.framebufferTexture2D(
-      gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0
+      gl.FRAMEBUFFER,
+      gl.COLOR_ATTACHMENT0,
+      gl.TEXTURE_2D,
+      t,
+      0
     )
     const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER)
     if (status !== gl.FRAMEBUFFER_COMPLETE) {
@@ -820,8 +924,15 @@ export class WebGl2Renderer implements GpuRenderer {
     const t = gl.createTexture()!
     gl.bindTexture(gl.TEXTURE_2D, t)
     gl.texImage2D(
-      gl.TEXTURE_2D, 0, gl.RGBA, this.outW, this.outH, 0,
-      gl.RGBA, gl.UNSIGNED_BYTE, null
+      gl.TEXTURE_2D,
+      0,
+      gl.RGBA,
+      this.outW,
+      this.outH,
+      0,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      null
     )
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
@@ -830,18 +941,30 @@ export class WebGl2Renderer implements GpuRenderer {
     const f = gl.createFramebuffer()!
     gl.bindFramebuffer(gl.FRAMEBUFFER, f)
     gl.framebufferTexture2D(
-      gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0
+      gl.FRAMEBUFFER,
+      gl.COLOR_ATTACHMENT0,
+      gl.TEXTURE_2D,
+      t,
+      0
     )
     const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER)
     if (status !== gl.FRAMEBUFFER_COMPLETE) {
-      throw new Error(`segmo composite FBO incomplete: 0x${status.toString(16)}`)
+      throw new Error(
+        `segmo composite FBO incomplete: 0x${status.toString(16)}`
+      )
     }
     this.segmoCompositeTex = t
     this.fboSegmoComposite = f
   }
 
   private _ensureSegmoTintTargets() {
-    if (this.maskedFgTex && this.fboMaskedFg && this.tintedVideoTex && this.fboTintedVideo) return
+    if (
+      this.maskedFgTex &&
+      this.fboMaskedFg &&
+      this.tintedVideoTex &&
+      this.fboTintedVideo
+    )
+      return
     const gl = this.gl
     // Masked foreground: mipmapped, RGBA8. rgb = video * weight, a = weight.
     // Top mip yields (sum(video*weight), sum(weight)) so the cast shader can
@@ -849,17 +972,32 @@ export class WebGl2Renderer implements GpuRenderer {
     const mft = gl.createTexture()!
     gl.bindTexture(gl.TEXTURE_2D, mft)
     gl.texImage2D(
-      gl.TEXTURE_2D, 0, gl.RGBA, this.outW, this.outH, 0,
-      gl.RGBA, gl.UNSIGNED_BYTE, null
+      gl.TEXTURE_2D,
+      0,
+      gl.RGBA,
+      this.outW,
+      this.outH,
+      0,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      null
     )
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR)
+    gl.texParameteri(
+      gl.TEXTURE_2D,
+      gl.TEXTURE_MIN_FILTER,
+      gl.LINEAR_MIPMAP_LINEAR
+    )
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
     const mff = gl.createFramebuffer()!
     gl.bindFramebuffer(gl.FRAMEBUFFER, mff)
     gl.framebufferTexture2D(
-      gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, mft, 0
+      gl.FRAMEBUFFER,
+      gl.COLOR_ATTACHMENT0,
+      gl.TEXTURE_2D,
+      mft,
+      0
     )
     if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
       throw new Error('segmo masked-fg FBO incomplete')
@@ -870,8 +1008,15 @@ export class WebGl2Renderer implements GpuRenderer {
     const tvt = gl.createTexture()!
     gl.bindTexture(gl.TEXTURE_2D, tvt)
     gl.texImage2D(
-      gl.TEXTURE_2D, 0, gl.RGBA, this.outW, this.outH, 0,
-      gl.RGBA, gl.UNSIGNED_BYTE, null
+      gl.TEXTURE_2D,
+      0,
+      gl.RGBA,
+      this.outW,
+      this.outH,
+      0,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      null
     )
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
@@ -880,7 +1025,11 @@ export class WebGl2Renderer implements GpuRenderer {
     const tvf = gl.createFramebuffer()!
     gl.bindFramebuffer(gl.FRAMEBUFFER, tvf)
     gl.framebufferTexture2D(
-      gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tvt, 0
+      gl.FRAMEBUFFER,
+      gl.COLOR_ATTACHMENT0,
+      gl.TEXTURE_2D,
+      tvt,
+      0
     )
     if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
       throw new Error('segmo tinted-video FBO incomplete')
@@ -894,11 +1043,6 @@ export class WebGl2Renderer implements GpuRenderer {
 
   private _compositeVirtualSegmo(bgTex: WebGLTexture, maskTex: WebGLTexture) {
     const gl = this.gl
-    if (!this._segmoLogged) {
-      this._segmoLogged = true
-      // One-shot confirmation that the segmo composite path is active.
-      console.log('[WebGl2Renderer] segmo virtual-bg composite active')
-    }
 
     // Pass A: edge-only feather (widens the transition band near silhouettes,
     // leaves interior/exterior alone). Output is R8 at output resolution.
@@ -922,9 +1066,17 @@ export class WebGl2Renderer implements GpuRenderer {
       // Lazy: ensure the bg texture has a mipmap chain after upload. Detects
       // upload-completed transitions via virtualImgUploaded (reset to false in
       // setVirtualBackground on every new image).
-      if (this.virtualImgUploaded && !this._segmoBgMipmapsValid && this.virtualBgTex) {
+      if (
+        this.virtualImgUploaded &&
+        !this._segmoBgMipmapsValid &&
+        this.virtualBgTex
+      ) {
         gl.bindTexture(gl.TEXTURE_2D, this.virtualBgTex)
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR)
+        gl.texParameteri(
+          gl.TEXTURE_2D,
+          gl.TEXTURE_MIN_FILTER,
+          gl.LINEAR_MIPMAP_LINEAR
+        )
         gl.generateMipmap(gl.TEXTURE_2D)
         this._segmoBgMipmapsValid = true
       } else if (!this.virtualImgUploaded) {
@@ -964,7 +1116,10 @@ export class WebGl2Renderer implements GpuRenderer {
         gl.activeTexture(gl.TEXTURE2)
         gl.bindTexture(gl.TEXTURE_2D, bgTex)
         gl.uniform1i(this.uLoc.fgCast.uBg, 2)
-        gl.uniform1f(this.uLoc.fgCast.uStrength, this.segmoForegroundTintStrength)
+        gl.uniform1f(
+          this.uLoc.fgCast.uStrength,
+          this.segmoForegroundTintStrength
+        )
         this._drawQuad()
         videoSrc = this.tintedVideoTex!
       }
@@ -1113,9 +1268,27 @@ export class WebGl2Renderer implements GpuRenderer {
     this.fboEma = makeFbo(this.emaTex)
 
     // BG half-res buffers (RGBA8)
-    this.bgDownTex = makeTex(this.halfW, this.halfH, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE)
-    this.bgBlurPingTex = makeTex(this.halfW, this.halfH, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE)
-    this.bgBlurPongTex = makeTex(this.halfW, this.halfH, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE)
+    this.bgDownTex = makeTex(
+      this.halfW,
+      this.halfH,
+      gl.RGBA,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE
+    )
+    this.bgBlurPingTex = makeTex(
+      this.halfW,
+      this.halfH,
+      gl.RGBA,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE
+    )
+    this.bgBlurPongTex = makeTex(
+      this.halfW,
+      this.halfH,
+      gl.RGBA,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE
+    )
     this.fboBgDown = makeFbo(this.bgDownTex)
     this.fboBgBlurPing = makeFbo(this.bgBlurPingTex)
     this.fboBgBlurPong = makeFbo(this.bgBlurPongTex)
@@ -1304,7 +1477,7 @@ void main() {
     this.pCopyR = this._link(VS, FS_COPY_R)
     this.pMaskedDownsample = this._link(VS, FS_MASKED_DOWNSAMPLE)
     this.pMaskWeightedBlur = this._link(VS, FS_MASK_WEIGHTED_BLUR)
-    
+
     const FS_MORPHOLOGY = `#version 300 es
 precision mediump float;
 in vec2 vUv;
@@ -1573,18 +1746,68 @@ void main() {
     // through the GL driver which can stall the CPU-GPU pipeline.
     const loc = (p: WebGLProgram, n: string) => this.gl.getUniformLocation(p, n)
     this.uLoc = {
-      sigmoid:    { uTex: loc(this.pSigmoid, 'uTex'), uSteepness: loc(this.pSigmoid, 'uSteepness'), uThreshold: loc(this.pSigmoid, 'uThreshold') },
-      ema:        { uTex: loc(this.pEma, 'uTex'), uPrev: loc(this.pEma, 'uPrev'), uAlpha: loc(this.pEma, 'uAlpha') },
-      copyR:      { uTex: loc(this.pCopyR, 'uTex') },
-      morphology: { uTex: loc(this.pMorphology, 'uTex'), uRadius: loc(this.pMorphology, 'uRadius'), uTexel: loc(this.pMorphology, 'uTexel') },
-      maskedDown: { uFrame: loc(this.pMaskedDownsample, 'uFrame'), uMask: loc(this.pMaskedDownsample, 'uMask'), uSourceTexelSize: loc(this.pMaskedDownsample, 'uSourceTexelSize') },
-      blur:       { uImage: loc(this.pMaskWeightedBlur, 'uImage'), uMask: loc(this.pMaskWeightedBlur, 'uMask'), uDirection: loc(this.pMaskWeightedBlur, 'uDirection'), uTexelSize: loc(this.pMaskWeightedBlur, 'uTexelSize'), uRadius: loc(this.pMaskWeightedBlur, 'uRadius') },
-      composite:  { uVideo: loc(this.pComposite, 'uVideo'), uBg: loc(this.pComposite, 'uBg'), uMask: loc(this.pComposite, 'uMask'), uErosionRadius: loc(this.pComposite, 'uErosionRadius'), uOutTexel: loc(this.pComposite, 'uOutTexel') },
-      segmo:      { uVideo: loc(this.pCompositeSegmo, 'uVideo'), uBg: loc(this.pCompositeSegmo, 'uBg'), uMask: loc(this.pCompositeSegmo, 'uMask'), uOutTexel: loc(this.pCompositeSegmo, 'uOutTexel') },
-      feather:    { uMask: loc(this.pSegmoEdgeFeather, 'uMask'), uTexel: loc(this.pSegmoEdgeFeather, 'uTexel'), uRadius: loc(this.pSegmoEdgeFeather, 'uRadius') },
-      lightWrap:  { uComposite: loc(this.pLightWrap, 'uComposite'), uBg: loc(this.pLightWrap, 'uBg'), uMask: loc(this.pLightWrap, 'uMask'), uStrength: loc(this.pLightWrap, 'uStrength') },
-      maskedFg:   { uVideo: loc(this.pMaskedFg, 'uVideo'), uMask: loc(this.pMaskedFg, 'uMask') },
-      fgCast:     { uVideo: loc(this.pFgColorCast, 'uVideo'), uFgMasked: loc(this.pFgColorCast, 'uFgMasked'), uBg: loc(this.pFgColorCast, 'uBg'), uStrength: loc(this.pFgColorCast, 'uStrength') },
+      sigmoid: {
+        uTex: loc(this.pSigmoid, 'uTex'),
+        uSteepness: loc(this.pSigmoid, 'uSteepness'),
+        uThreshold: loc(this.pSigmoid, 'uThreshold'),
+      },
+      ema: {
+        uTex: loc(this.pEma, 'uTex'),
+        uPrev: loc(this.pEma, 'uPrev'),
+        uAlpha: loc(this.pEma, 'uAlpha'),
+      },
+      copyR: { uTex: loc(this.pCopyR, 'uTex') },
+      morphology: {
+        uTex: loc(this.pMorphology, 'uTex'),
+        uRadius: loc(this.pMorphology, 'uRadius'),
+        uTexel: loc(this.pMorphology, 'uTexel'),
+      },
+      maskedDown: {
+        uFrame: loc(this.pMaskedDownsample, 'uFrame'),
+        uMask: loc(this.pMaskedDownsample, 'uMask'),
+        uSourceTexelSize: loc(this.pMaskedDownsample, 'uSourceTexelSize'),
+      },
+      blur: {
+        uImage: loc(this.pMaskWeightedBlur, 'uImage'),
+        uMask: loc(this.pMaskWeightedBlur, 'uMask'),
+        uDirection: loc(this.pMaskWeightedBlur, 'uDirection'),
+        uTexelSize: loc(this.pMaskWeightedBlur, 'uTexelSize'),
+        uRadius: loc(this.pMaskWeightedBlur, 'uRadius'),
+      },
+      composite: {
+        uVideo: loc(this.pComposite, 'uVideo'),
+        uBg: loc(this.pComposite, 'uBg'),
+        uMask: loc(this.pComposite, 'uMask'),
+        uErosionRadius: loc(this.pComposite, 'uErosionRadius'),
+        uOutTexel: loc(this.pComposite, 'uOutTexel'),
+      },
+      segmo: {
+        uVideo: loc(this.pCompositeSegmo, 'uVideo'),
+        uBg: loc(this.pCompositeSegmo, 'uBg'),
+        uMask: loc(this.pCompositeSegmo, 'uMask'),
+        uOutTexel: loc(this.pCompositeSegmo, 'uOutTexel'),
+      },
+      feather: {
+        uMask: loc(this.pSegmoEdgeFeather, 'uMask'),
+        uTexel: loc(this.pSegmoEdgeFeather, 'uTexel'),
+        uRadius: loc(this.pSegmoEdgeFeather, 'uRadius'),
+      },
+      lightWrap: {
+        uComposite: loc(this.pLightWrap, 'uComposite'),
+        uBg: loc(this.pLightWrap, 'uBg'),
+        uMask: loc(this.pLightWrap, 'uMask'),
+        uStrength: loc(this.pLightWrap, 'uStrength'),
+      },
+      maskedFg: {
+        uVideo: loc(this.pMaskedFg, 'uVideo'),
+        uMask: loc(this.pMaskedFg, 'uMask'),
+      },
+      fgCast: {
+        uVideo: loc(this.pFgColorCast, 'uVideo'),
+        uFgMasked: loc(this.pFgColorCast, 'uFgMasked'),
+        uBg: loc(this.pFgColorCast, 'uBg'),
+        uStrength: loc(this.pFgColorCast, 'uStrength'),
+      },
     }
   }
 }

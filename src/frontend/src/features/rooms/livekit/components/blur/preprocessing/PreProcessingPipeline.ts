@@ -68,7 +68,14 @@ export class PreProcessingPipeline {
   ): Float32Array {
     if (!this.roiCropper || !usedBbox) return mask
 
-    const full = this.roiCropper.remapMask(mask, maskW, maskH, usedBbox, maskW, maskH)
+    const full = this.roiCropper.remapMask(
+      mask,
+      maskW,
+      maskH,
+      usedBbox,
+      maskW,
+      maskH
+    )
     this.roiCropper.updateWithMask(full, maskW, maskH)
     return full
   }

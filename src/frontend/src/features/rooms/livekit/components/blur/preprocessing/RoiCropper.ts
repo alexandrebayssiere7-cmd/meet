@@ -9,9 +9,9 @@ const MOTION_CHECK_INTERVAL = 30
 const EXPANSION_COOLDOWN_FRAMES = 30
 
 export interface BBox {
-  x: number      // normalised left edge [0, 1]
-  y: number      // normalised top edge  [0, 1]
-  width: number  // normalised width     [0, 1]
+  x: number // normalised left edge [0, 1]
+  y: number // normalised top edge  [0, 1]
+  width: number // normalised width     [0, 1]
   height: number // normalised height    [0, 1]
 }
 
@@ -28,7 +28,10 @@ export function computePersonBbox(
   maskW: number,
   maskH: number
 ): BBox | null {
-  let minX = maskW, maxX = -1, minY = maskH, maxY = -1
+  let minX = maskW,
+    maxX = -1,
+    minY = maskH,
+    maxY = -1
 
   for (let y = 0; y < maskH; y++) {
     for (let x = 0; x < maskW; x++) {
@@ -110,8 +113,10 @@ function resizeFloat32Into(
       const ix0 = sx0 < 0 ? 0 : sx0 >= srcW ? srcW - 1 : sx0
       const ix1 = sx1 < 0 ? 0 : sx1 >= srcW ? srcW - 1 : sx1
 
-      const v = (1 - fy) * ((1 - fx) * src[iy0 * srcW + ix0] + fx * src[iy0 * srcW + ix1]) +
-                      fy  * ((1 - fx) * src[iy1 * srcW + ix0] + fx * src[iy1 * srcW + ix1])
+      const v =
+        (1 - fy) *
+          ((1 - fx) * src[iy0 * srcW + ix0] + fx * src[iy0 * srcW + ix1]) +
+        fy * ((1 - fx) * src[iy1 * srcW + ix0] + fx * src[iy1 * srcW + ix1])
       dst[dy * dstW + dx] = v
     }
   }
@@ -152,7 +157,10 @@ export class RoiCropper {
 
     if (this.frameCounter % MOTION_CHECK_INTERVAL === 0) {
       const motionDetected =
-        !!currentRgba && !!rgbaW && !!rgbaH && !!this.prevLuma &&
+        !!currentRgba &&
+        !!rgbaW &&
+        !!rgbaH &&
+        !!this.prevLuma &&
         this._hasMotionOutsideBbox(currentRgba, rgbaW, rgbaH, this.currentBbox)
       this._updatePrevLuma(currentRgba, rgbaW, rgbaH)
       if (motionDetected) {
@@ -239,7 +247,14 @@ export class RoiCropper {
     if (!this._resizeBuf || this._resizeBuf.length !== resizeLen) {
       this._resizeBuf = new Float32Array(resizeLen)
     }
-    resizeFloat32Into(cropMask, cropMaskW, cropMaskH, this._resizeBuf, dstW, dstH)
+    resizeFloat32Into(
+      cropMask,
+      cropMaskW,
+      cropMaskH,
+      this._resizeBuf,
+      dstW,
+      dstH
+    )
 
     for (let y = 0; y < dstH; y++) {
       const fy = dstY + y

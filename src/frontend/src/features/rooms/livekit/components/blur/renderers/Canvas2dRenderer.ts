@@ -1,10 +1,6 @@
 import { PostProcessingConfig, UpsamplingConfig } from '..'
 import { pushMattingError } from '../errors/MattingErrorStore'
-import {
-  GpuRenderer,
-  GpuRendererInitOpts,
-  RenderSource,
-} from './GpuRenderer'
+import { GpuRenderer, GpuRendererInitOpts, RenderSource } from './GpuRenderer'
 
 /**
  * Canvas2D fallback renderer. Used when WebGL2 is unavailable (no GPU, GPU
@@ -47,13 +43,17 @@ export class Canvas2dRenderer implements GpuRenderer {
   private emaAlpha = 0
   private emaPrevMask: Float32Array | null = null
 
-  async init(canvas: HTMLCanvasElement, opts: GpuRendererInitOpts): Promise<void> {
+  async init(
+    canvas: HTMLCanvasElement,
+    opts: GpuRendererInitOpts
+  ): Promise<void> {
     const ctx = canvas.getContext('2d', { alpha: false })
     if (!ctx) {
       pushMattingError({
         code: 'WEBGL2_INIT_FAILED',
         level: 'error',
-        detail: 'getContext("2d") returned null — Canvas2D fallback also unavailable',
+        detail:
+          'getContext("2d") returned null — Canvas2D fallback also unavailable',
       })
       throw new Error('Canvas2D unavailable')
     }
@@ -148,7 +148,8 @@ export class Canvas2dRenderer implements GpuRenderer {
     // Only the temporal EMA is honored on the Canvas2D path. Sigmoid, erosion,
     // opening, closing all require shader passes we don't reproduce in CPU.
     const a = cfg.ema?.alpha
-    this.emaAlpha = typeof a === 'number' && Number.isFinite(a) && a > 0 && a <= 1 ? a : 0
+    this.emaAlpha =
+      typeof a === 'number' && Number.isFinite(a) && a > 0 && a <= 1 ? a : 0
     if (this.emaAlpha === 0) this.emaPrevMask = null
   }
 
@@ -279,23 +280,33 @@ export class Canvas2dRenderer implements GpuRenderer {
   }
 
   private _ensureScratchCanvases(): void {
-    if (!this.bgCanvas || this.bgCanvas.width !== this.outW || this.bgCanvas.height !== this.outH) {
+    if (
+      !this.bgCanvas ||
+      this.bgCanvas.width !== this.outW ||
+      this.bgCanvas.height !== this.outH
+    ) {
       const c = document.createElement('canvas')
       c.width = this.outW
       c.height = this.outH
       const ctx = c.getContext('2d', { alpha: false })
-      if (!ctx) throw new Error('Canvas2dRenderer: bg canvas 2d context unavailable')
+      if (!ctx)
+        throw new Error('Canvas2dRenderer: bg canvas 2d context unavailable')
       ctx.imageSmoothingEnabled = true
       ctx.imageSmoothingQuality = 'medium'
       this.bgCanvas = c
       this.bgCtx = ctx
     }
-    if (!this.fgCanvas || this.fgCanvas.width !== this.outW || this.fgCanvas.height !== this.outH) {
+    if (
+      !this.fgCanvas ||
+      this.fgCanvas.width !== this.outW ||
+      this.fgCanvas.height !== this.outH
+    ) {
       const c = document.createElement('canvas')
       c.width = this.outW
       c.height = this.outH
       const ctx = c.getContext('2d', { alpha: true })
-      if (!ctx) throw new Error('Canvas2dRenderer: fg canvas 2d context unavailable')
+      if (!ctx)
+        throw new Error('Canvas2dRenderer: fg canvas 2d context unavailable')
       ctx.imageSmoothingEnabled = true
       ctx.imageSmoothingQuality = 'medium'
       this.fgCanvas = c
@@ -314,7 +325,11 @@ export class Canvas2dRenderer implements GpuRenderer {
   // Draw `source` into `ctx` at (0,0)→(outW,outH). When `flip` is true,
   // mirror vertically to undo the imageOrientation:'flipY' baked into
   // ImageBitmap sources by AMP for the WebGL2 renderer.
-  private _drawFlipped(ctx: CanvasRenderingContext2D, source: RenderSource, flip: boolean): void {
+  private _drawFlipped(
+    ctx: CanvasRenderingContext2D,
+    source: RenderSource,
+    flip: boolean
+  ): void {
     if (!flip) {
       ctx.drawImage(source, 0, 0, this.outW, this.outH)
       return

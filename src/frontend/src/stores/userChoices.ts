@@ -39,7 +39,10 @@ subscribe(userChoicesStore, () => {
 // Drop unknown or heavy/unsafe SegmentationModel values like RVM that may exist in older localStorage,
 // and default to SegmentationModel.AUTO if model is not set or was previously set to RVM (to avoid crashes).
 const cfg = userChoicesStore.processorConfig
-if (cfg && (cfg.type === ProcessorType.BLUR || cfg.type === ProcessorType.VIRTUAL)) {
+if (
+  cfg &&
+  (cfg.type === ProcessorType.BLUR || cfg.type === ProcessorType.VIRTUAL)
+) {
   if (
     cfg.model === undefined ||
     cfg.model === SegmentationModel.RVM ||

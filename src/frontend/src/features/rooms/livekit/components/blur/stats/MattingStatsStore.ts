@@ -8,9 +8,9 @@ import { MaskBlendMode, SegmentationModel } from '..'
  * a re-render on every render-loop tick (~50 Hz).
  */
 export interface CameraSettings {
-  frameRateRequested: number | null   // ce qu'on a demandé (ideal)
-  frameRateActual: number | null      // ce que getSettings() rapporte
-  frameRateMax: number | null         // max hardware via getCapabilities()
+  frameRateRequested: number | null // ce qu'on a demandé (ideal)
+  frameRateActual: number | null // ce que getSettings() rapporte
+  frameRateMax: number | null // max hardware via getCapabilities()
   width: number | null
   height: number | null
 }
@@ -203,7 +203,9 @@ export function setCameraSettings(settings: CameraSettings): void {
 }
 
 export function setMotionScore(uvPerSec: number): void {
-  mattingStatsStore.motionScoreUvPerSec = Number.isFinite(uvPerSec) ? uvPerSec : 0
+  mattingStatsStore.motionScoreUvPerSec = Number.isFinite(uvPerSec)
+    ? uvPerSec
+    : 0
 }
 
 export function setEffectiveLatencyMode(mode: MaskBlendMode | null): void {

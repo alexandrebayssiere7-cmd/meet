@@ -58,7 +58,10 @@ export class MaskMotionTracker {
 
     const dx = cx - this.prevCx
     const dy = cy - this.prevCy
-    if (Math.abs(dx) > TELEPORT_THRESHOLD_UV || Math.abs(dy) > TELEPORT_THRESHOLD_UV) {
+    if (
+      Math.abs(dx) > TELEPORT_THRESHOLD_UV ||
+      Math.abs(dy) > TELEPORT_THRESHOLD_UV
+    ) {
       this.prevCx = cx
       this.prevCy = cy
       this.prevT = cameraCaptureTime

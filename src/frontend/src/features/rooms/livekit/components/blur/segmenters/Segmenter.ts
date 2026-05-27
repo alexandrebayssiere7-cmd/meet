@@ -1,10 +1,9 @@
-import {
-  FilesetResolver,
-  ImageSegmenter,
-} from '@mediapipe/tasks-vision'
-import {
-  pushMattingError,
-} from '../errors/MattingErrorStore'
+import { FilesetResolver, ImageSegmenter } from '@mediapipe/tasks-vision'
+
+type MediapipeFileset = Awaited<
+  ReturnType<typeof FilesetResolver.forVisionTasks>
+>
+import { pushMattingError } from '../errors/MattingErrorStore'
 
 /**
  * Segmenter: abstracts the segmentation model behind a uniform interface.
@@ -21,11 +20,10 @@ export interface Segmenter {
 const MEDIAPIPE_WASM_URL =
   'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm'
 
-let _filesetPromise: Promise<any> | null =
-  null
+let _filesetPromise: Promise<MediapipeFileset> | null = null
 
 /** Cache the FilesetResolver across segmenter instances — it loads ~1MB of WASM. */
-export function getMediapipeFileset(): Promise<any> {
+export function getMediapipeFileset(): Promise<MediapipeFileset> {
   if (!_filesetPromise) {
     _filesetPromise = FilesetResolver.forVisionTasks(MEDIAPIPE_WASM_URL).catch(
       (e) => {

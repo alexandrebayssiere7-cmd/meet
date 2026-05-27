@@ -51,11 +51,11 @@ const isSupported = BackgroundProcessorFactory.isSupported()
 
 const BACKGROUND_THEMES: Array<{ key: string; indices: number[] }> = [
   { key: 'interior', indices: [1, 2, 3, 4, 5, 6, 7, 8, 9] },
-  { key: 'nature',   indices: [] },
-  { key: 'urban',    indices: [] },
+  { key: 'nature', indices: [] },
+  { key: 'urban', indices: [] },
   { key: 'abstract', indices: [] },
-  { key: 'tech',     indices: [] },
-  { key: 'childhood',indices: [] },
+  { key: 'tech', indices: [] },
+  { key: 'childhood', indices: [] },
 ]
 
 const Information = styled('div', {
@@ -156,11 +156,16 @@ const SliderRow = ({
 
 const modelLabel = (m: SegmentationModel | null): string => {
   switch (m) {
-    case SegmentationModel.LANDSCAPE: return 'Landscape'
-    case SegmentationModel.MULTICLASS: return 'Multiclass'
-    case SegmentationModel.RVM: return 'RVM'
-    case SegmentationModel.AUTO: return 'Auto'
-    default: return '—'
+    case SegmentationModel.LANDSCAPE:
+      return 'Landscape'
+    case SegmentationModel.MULTICLASS:
+      return 'Multiclass'
+    case SegmentationModel.RVM:
+      return 'RVM'
+    case SegmentationModel.AUTO:
+      return 'Auto'
+    default:
+      return '—'
   }
 }
 
@@ -182,10 +187,7 @@ const MattingDiagnostics = () => {
         gap: '0.2rem',
       })}
     >
-      <Text
-        variant="bodyXsBold"
-        className={css({ marginBottom: '0.15rem' })}
-      >
+      <Text variant="bodyXsBold" className={css({ marginBottom: '0.15rem' })}>
         {t('effects.stats.title', 'Diagnostics matting')}
       </Text>
       {showActive && (
@@ -194,9 +196,12 @@ const MattingDiagnostics = () => {
           <strong>{modelLabel(stats.currentModel)}</strong>
           {stats.currentModel === SegmentationModel.MULTICLASS && (
             <span className={css({ color: 'greyscale.500' })}>
-              {' '}· skip={stats.segmenterFrameSkip} ({stats.segmenterFrameSkip === 1
+              {' '}
+              · skip={stats.segmenterFrameSkip} (
+              {stats.segmenterFrameSkip === 1
                 ? t('effects.stats.skip1Label', '30 fps')
-                : t('effects.stats.skip2Label', '15 fps')})
+                : t('effects.stats.skip2Label', '15 fps')}
+              )
             </span>
           )}
         </Text>
@@ -209,18 +214,23 @@ const MattingDiagnostics = () => {
         {t('effects.stats.maskGap', 'Mask→render gap')} :{' '}
         <strong>{stats.maskFrameGapMs.toFixed(1)} ms</strong>{' '}
         <span className={css({ color: 'greyscale.500' })}>
-          ({t('effects.stats.windowAvg', 'avg of last {{n}}', { n: stats.samples })})
+          (
+          {t('effects.stats.windowAvg', 'avg of last {{n}}', {
+            n: stats.samples,
+          })}
+          )
         </span>
       </Text>
       <Text variant="sm">
         {t('effects.stats.inference', 'Segmenter inference')} :{' '}
-        <strong>{stats.segmenterInferenceMs.toFixed(1)} ms</strong>
-        {' '}
+        <strong>{stats.segmenterInferenceMs.toFixed(1)} ms</strong>{' '}
         <span className={css({ color: 'greyscale.500' })}>
-          ({t('effects.stats.frameSkip', 'skip={{n}} → {{fps}} fps', {
+          (
+          {t('effects.stats.frameSkip', 'skip={{n}} → {{fps}} fps', {
             n: stats.segmenterFrameSkip,
             fps: stats.segmenterFps.toFixed(0),
-          })})
+          })}
+          )
         </span>
       </Text>
       <Text variant="sm">
@@ -228,10 +238,10 @@ const MattingDiagnostics = () => {
         <strong>{stats.cameraFps.toFixed(1)}</strong>{' '}
         <span className={css({ color: 'greyscale.500' })}>
           ({t('effects.stats.fpsCamera', 'camera')}) ·{' '}
-          <strong>{stats.renderFps.toFixed(1)}</strong>{' '}
-          ({t('effects.stats.fpsRender', 'render')}) ·{' '}
-          <strong>{stats.segmenterFps.toFixed(1)}</strong>{' '}
-          ({t('effects.stats.fpsSegmenter', 'segmenter')})
+          <strong>{stats.renderFps.toFixed(1)}</strong> (
+          {t('effects.stats.fpsRender', 'render')}) ·{' '}
+          <strong>{stats.segmenterFps.toFixed(1)}</strong> (
+          {t('effects.stats.fpsSegmenter', 'segmenter')})
         </span>
       </Text>
       {stats.cameraSettings && (
@@ -242,7 +252,9 @@ const MattingDiagnostics = () => {
           </strong>{' '}
           <span className={css({ color: 'greyscale.500' })}>
             {stats.cameraSettings.frameRateActual !== null && (
-              <>{stats.cameraSettings.frameRateActual.toFixed(0)} fps (actuel)</>
+              <>
+                {stats.cameraSettings.frameRateActual.toFixed(0)} fps (actuel)
+              </>
             )}
             {stats.cameraSettings.frameRateMax !== null && (
               <> · max {stats.cameraSettings.frameRateMax.toFixed(0)} fps</>
@@ -275,7 +287,8 @@ const LatencyAutoReadout = () => {
         fontStyle: 'italic',
       })}
     >
-      {t('advanced.params.effectiveModeLabelPrefix')} : <strong>{modeLabel}</strong>
+      {t('advanced.params.effectiveModeLabelPrefix')} :{' '}
+      <strong>{modeLabel}</strong>
       {' · '}
       {t('advanced.params.motionScoreLabel')} :{' '}
       <strong>{stats.motionScoreUvPerSec.toFixed(2)}</strong> uv/s
@@ -376,9 +389,7 @@ export const EffectsConfiguration = ({
     Math.log10(initialUP.eps ?? 0.01)
   )
   const [emaEnabled, setEmaEnabled] = useState(!!initialPP.ema)
-  const [emaAlpha, setEmaAlpha] = useState<number>(
-    initialPP.ema?.alpha ?? 0.5
-  )
+  const [emaAlpha, setEmaAlpha] = useState<number>(initialPP.ema?.alpha ?? 0.5)
   const [openingEnabled, setOpeningEnabled] = useState(!!initialPP.opening)
   const [openingRadius, setOpeningRadius] = useState<number>(
     initialPP.opening?.radius ?? 0
@@ -394,10 +405,12 @@ export const EffectsConfiguration = ({
     isBlurOrVirtual && typeof processorConfig.latencyMode === 'number'
       ? (processorConfig.latencyMode as LatencyMode)
       : 2
-  const initialLatencyAuto: boolean =
-    isBlurOrVirtual ? processorConfig.latencyAuto !== false : true
-  const initialMaskPrediction: boolean =
-    isBlurOrVirtual ? processorConfig.maskPrediction === true : false
+  const initialLatencyAuto: boolean = isBlurOrVirtual
+    ? processorConfig.latencyAuto !== false
+    : true
+  const initialMaskPrediction: boolean = isBlurOrVirtual
+    ? processorConfig.maskPrediction === true
+    : false
   const [latencyMode, setLatencyMode] =
     useState<LatencyMode>(initialLatencyMode)
   const [latencyAuto, setLatencyAuto] = useState<boolean>(initialLatencyAuto)
@@ -426,8 +439,10 @@ export const EffectsConfiguration = ({
     if (erosionEnabled && erosionPixels > 0)
       cfg.erosion = { pixels: erosionPixels }
     if (emaEnabled) cfg.ema = { alpha: emaAlpha }
-    if (openingEnabled && openingRadius > 0) cfg.opening = { radius: openingRadius }
-    if (closingEnabled && closingRadius > 0) cfg.closing = { radius: closingRadius }
+    if (openingEnabled && openingRadius > 0)
+      cfg.opening = { radius: openingRadius }
+    if (closingEnabled && closingRadius > 0)
+      cfg.closing = { radius: closingRadius }
     return cfg
   }, [
     sigmoidEnabled,
@@ -463,9 +478,7 @@ export const EffectsConfiguration = ({
           model,
           preProcessing: buildPreProcessing(),
           rvmDownsampleRatio:
-            model === SegmentationModel.RVM && rvmManual
-              ? rvmRatio
-              : undefined,
+            model === SegmentationModel.RVM && rvmManual ? rvmRatio : undefined,
           postProcessing: buildPostProcessing(),
           upsampling: buildUpsampling(),
           latencyMode,
@@ -636,8 +649,9 @@ export const EffectsConfiguration = ({
       processorConfig.type !== ProcessorType.VIRTUAL
     )
       return
-    const processor =
-      videoTrack.getProcessor() as BackgroundProcessorInterface | undefined
+    const processor = videoTrack.getProcessor() as
+      | BackgroundProcessorInterface
+      | undefined
     if (!processor) return
     const newConfig = withAdvanced(processorConfig)
     setProcessorPending(true)
@@ -874,26 +888,31 @@ export const EffectsConfiguration = ({
           config,
         }
       }),
-      virtualBackgroundThemes: BACKGROUND_THEMES
-        .map(theme => ({
-          key: theme.key,
-          backgrounds: theme.indices.map(fileIndex => {
-            const arrIndex = fileIndex - 1
-            const imagePath = `/assets/backgrounds/${fileIndex}.jpg`
-            const thumbnailPath = `/assets/backgrounds/thumbnails/${fileIndex}.jpg`
-            const config: ProcessorConfig = {
-              type: ProcessorType.VIRTUAL,
-              imagePath,
-            }
-            const id = deriveIdFromProcessorConfig(config)
-            const isSelected = selectedId === id
-            const prefix = isSelected ? 'selectedLabel' : 'apply'
-            const backgroundName = t(`virtual.presets.descriptions.${arrIndex}`)
-            const ariaLabel = `${t(`virtual.presets.${prefix}`)} ${backgroundName}`
-            return { id, config, isSelected, thumbnailPath, ariaLabel, backgroundName }
-          }),
-        }))
-        .filter(theme => theme.backgrounds.length > 0),
+      virtualBackgroundThemes: BACKGROUND_THEMES.map((theme) => ({
+        key: theme.key,
+        backgrounds: theme.indices.map((fileIndex) => {
+          const arrIndex = fileIndex - 1
+          const imagePath = `/assets/backgrounds/${fileIndex}.jpg`
+          const thumbnailPath = `/assets/backgrounds/thumbnails/${fileIndex}.jpg`
+          const config: ProcessorConfig = {
+            type: ProcessorType.VIRTUAL,
+            imagePath,
+          }
+          const id = deriveIdFromProcessorConfig(config)
+          const isSelected = selectedId === id
+          const prefix = isSelected ? 'selectedLabel' : 'apply'
+          const backgroundName = t(`virtual.presets.descriptions.${arrIndex}`)
+          const ariaLabel = `${t(`virtual.presets.${prefix}`)} ${backgroundName}`
+          return {
+            id,
+            config,
+            isSelected,
+            thumbnailPath,
+            ariaLabel,
+            backgroundName,
+          }
+        }),
+      })).filter((theme) => theme.backgrounds.length > 0),
       remoteCustomVirtualBackgrounds: (filesQ.data?.results ?? [])
         .filter((file) => file.url)
         .map((file) => {
@@ -1048,13 +1067,17 @@ export const EffectsConfiguration = ({
         )}
         {isSupported ? (
           <div>
-            {mattingErrors.filter(e => e.level === 'error').map(e => (
-              <Information key={e.code} style={{ marginBottom: '1rem' }}>
-                <Text variant="bodyXsMedium">
-                  {t(`matting.errors.${e.code}`, { defaultValue: e.detail ?? e.code })}
-                </Text>
-              </Information>
-            ))}
+            {mattingErrors
+              .filter((e) => e.level === 'error')
+              .map((e) => (
+                <Information key={e.code} style={{ marginBottom: '1rem' }}>
+                  <Text variant="bodyXsMedium">
+                    {t(`matting.errors.${e.code}`, {
+                      defaultValue: e.detail ?? e.code,
+                    })}
+                  </Text>
+                </Information>
+              ))}
             <div>
               <H
                 lvl={2}
@@ -1307,11 +1330,8 @@ export const EffectsConfiguration = ({
                   </Text>
                 )}
               </div>
-              {processorOptions.virtualBackgroundThemes.map(theme => (
-                <div
-                  key={theme.key}
-                  className={css({ marginTop: '0.4rem' })}
-                >
+              {processorOptions.virtualBackgroundThemes.map((theme) => (
+                <div key={theme.key} className={css({ marginTop: '0.4rem' })}>
                   <H
                     lvl={3}
                     style={{ marginBottom: '0.4rem' }}
@@ -1327,8 +1347,11 @@ export const EffectsConfiguration = ({
                       flexWrap: 'wrap',
                     })}
                   >
-                    {theme.backgrounds.map(option => (
-                      <VisualOnlyTooltip key={option.id} tooltip={option.backgroundName}>
+                    {theme.backgrounds.map((option) => (
+                      <VisualOnlyTooltip
+                        key={option.id}
+                        tooltip={option.backgroundName}
+                      >
                         <ToggleButton
                           variant="bigSquare"
                           aria-label={option.ariaLabel}
@@ -1336,7 +1359,9 @@ export const EffectsConfiguration = ({
                           onChange={() => toggleEffect(option.config)}
                           isSelected={option.isSelected}
                           className={css({ bgSize: 'cover' })}
-                          style={{ backgroundImage: `url(${option.thumbnailPath})` }}
+                          style={{
+                            backgroundImage: `url(${option.thumbnailPath})`,
+                          }}
                           data-attr={`toggle-virtual-preset-${option.id}`}
                         />
                       </VisualOnlyTooltip>
@@ -1512,9 +1537,7 @@ export const EffectsConfiguration = ({
                       disabled={!roiCroppingEnabled}
                       onChange={(e) => setLatencyAuto(e.target.checked)}
                     />
-                    <Text variant="sm">
-                      {t('advanced.params.latencyAuto')}
-                    </Text>
+                    <Text variant="sm">{t('advanced.params.latencyAuto')}</Text>
                   </label>
                   <label
                     className={css({
@@ -1559,9 +1582,7 @@ export const EffectsConfiguration = ({
                       {t('advanced.params.enableRoiHint')}
                     </Text>
                   )}
-                  {roiCroppingEnabled && latencyAuto && (
-                    <LatencyAutoReadout />
-                  )}
+                  {roiCroppingEnabled && latencyAuto && <LatencyAutoReadout />}
                 </div>
 
                 <H
@@ -1592,7 +1613,9 @@ export const EffectsConfiguration = ({
                       checked={roiCroppingEnabled}
                       onChange={(e) => setRoiCroppingEnabled(e.target.checked)}
                     />
-                    <Text variant="sm">{t('advanced.preProcessing.roiCropping')}</Text>
+                    <Text variant="sm">
+                      {t('advanced.preProcessing.roiCropping')}
+                    </Text>
                   </label>
                 </div>
 
@@ -1623,7 +1646,9 @@ export const EffectsConfiguration = ({
                       checked={sigmoidEnabled}
                       onChange={(e) => setSigmoidEnabled(e.target.checked)}
                     />
-                    <Text variant="sm">{t('advanced.postProcessing.sigmoid')}</Text>
+                    <Text variant="sm">
+                      {t('advanced.postProcessing.sigmoid')}
+                    </Text>
                   </label>
                   <SliderRow
                     label={t('advanced.params.sigmoidSteepness')}
@@ -1658,7 +1683,9 @@ export const EffectsConfiguration = ({
                       checked={erosionEnabled}
                       onChange={(e) => setErosionEnabled(e.target.checked)}
                     />
-                    <Text variant="sm">{t('advanced.postProcessing.erosion')}</Text>
+                    <Text variant="sm">
+                      {t('advanced.postProcessing.erosion')}
+                    </Text>
                   </label>
                   <SliderRow
                     label={t('advanced.params.erosionPixels')}
@@ -1708,7 +1735,9 @@ export const EffectsConfiguration = ({
                       checked={openingEnabled}
                       onChange={(e) => setOpeningEnabled(e.target.checked)}
                     />
-                    <Text variant="sm">{t('advanced.postProcessing.opening')}</Text>
+                    <Text variant="sm">
+                      {t('advanced.postProcessing.opening')}
+                    </Text>
                   </label>
                   <SliderRow
                     label={t('advanced.params.openingRadius')}
@@ -1733,7 +1762,9 @@ export const EffectsConfiguration = ({
                       checked={closingEnabled}
                       onChange={(e) => setClosingEnabled(e.target.checked)}
                     />
-                    <Text variant="sm">{t('advanced.postProcessing.closing')}</Text>
+                    <Text variant="sm">
+                      {t('advanced.postProcessing.closing')}
+                    </Text>
                   </label>
                   <SliderRow
                     label={t('advanced.params.closingRadius')}
@@ -1773,7 +1804,9 @@ export const EffectsConfiguration = ({
                       checked={upsamplingGuided}
                       onChange={(e) => setUpsamplingGuided(e.target.checked)}
                     />
-                    <Text variant="sm">{t('advanced.upsampling.guidedFilter')}</Text>
+                    <Text variant="sm">
+                      {t('advanced.upsampling.guidedFilter')}
+                    </Text>
                   </label>
                   <SliderRow
                     label={t('advanced.params.upsamplingRadius')}
@@ -1787,7 +1820,9 @@ export const EffectsConfiguration = ({
                   />
                   <SliderRow
                     label={t('advanced.params.upsamplingEps')}
-                    displayValue={Math.pow(10, upsamplingEpsLog).toExponential(1)}
+                    displayValue={Math.pow(10, upsamplingEpsLog).toExponential(
+                      1
+                    )}
                     value={upsamplingEpsLog}
                     min={-4}
                     max={-1.3}

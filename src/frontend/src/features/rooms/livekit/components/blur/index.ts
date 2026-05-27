@@ -15,8 +15,6 @@ export enum SegmentationModel {
   RVM = 'rvm',
 }
 
-export type MorphologyOp = 'erosion' | 'dilation' | 'opening' | 'closing'
-
 export type PostProcessingConfig = {
   sigmoid?: { steepness: number; threshold: number }
   erosion?: { pixels: number }

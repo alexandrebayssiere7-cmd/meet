@@ -5,6 +5,7 @@ import '@tensorflow/tfjs-backend-webgpu'
 
 import { Segmenter } from './Segmenter'
 import { pushMattingError } from '../errors/MattingErrorStore'
+import { debugInfo } from '../debug'
 
 /**
  * Pick the fastest available TFJS backend.
@@ -101,9 +102,14 @@ export class RVMSegmenter implements Segmenter {
   async init(): Promise<void> {
     try {
       const backend = await pickTfjsBackend()
-      console.info('[RVM] tfjs ready, backend=', backend)
+      debugInfo('[RVM] tfjs ready, backend=', backend)
       this.model = await loadGraphModel(RVM_MODEL_URL)
-      console.info('[RVM] model loaded, inputs=', this.model.inputs.map(i => i.name), 'outputs=', this.model.outputs.map(o => o.name))
+      debugInfo(
+        '[RVM] model loaded, inputs=',
+        this.model.inputs.map((i) => i.name),
+        'outputs=',
+        this.model.outputs.map((o) => o.name)
+      )
       this.downsampleTensor = tf.scalar(this.downsampleRatio)
       this.recurrent = [
         tf.tensor1d([0]),
