@@ -254,71 +254,9 @@
     "notAvailable": "Video effects will be available soon on your browser. We're working on it! In the meantime, you can use Google Chrome for best performance or Firefox :(",
     "heading": "Blur",
     "clear": "Disable effect",
-    "advanced": {
-      "title": "Advanced settings",
-      "model": {
-        "title": "Segmentation model",
-        "auto": "Optimized (automatic)",
-        "landscape": "Landscape (fast)",
-        "multiclass": "Multiclass (quality)",
-        "rvm": "RVM (recurrent, higher quality)"
-      },
-      "rvmDownsample": {
-        "manual": "Manual downsample ratio",
-        "label": "Downsample ratio (RVM)"
-      },
-      "sync": {
-        "title": "Mask / frame synchronization"
-      },
-      "preProcessing": {
-        "title": "Pre-processing",
-        "roiCropping": "Person crop (ROI)"
-      },
-      "postProcessing": {
-        "title": "Post-processing",
-        "sigmoid": "Sigmoid",
-        "erosion": "Edge erosion",
-        "ema": "EMA",
-        "opening": "Erosion-Dilation (opening)",
-        "closing": "Dilation-Erosion (closing)"
-      },
-      "upsampling": {
-        "title": "Upsampling",
-        "guidedFilter": "Guided Filter (GPU)"
-      },
-      "params": {
-        "sigmoidSteepness": "Sigmoid steepness",
-        "sigmoidThreshold": "Sigmoid threshold",
-        "erosionPixels": "Pixels removed (edges)",
-        "emaAlpha": "Responsiveness (EMA)",
-        "openingRadius": "Opening radius (px)",
-        "closingRadius": "Closing radius (px)",
-        "blurRadius": "Blur intensity",
-        "upsamplingRadius": "Radius (Guided Filter)",
-        "upsamplingEps": "Regularization (Guided Filter)",
-        "latencyAuto": "Auto (adapt to motion)",
-        "maskPrediction": "Mask prediction (advanced)",
-        "latencyMode": "Halo / latency trade-off",
-        "latencyModeValue": {
-          "0": "Locked",
-          "1": "Stable",
-          "2": "Balanced",
-          "3": "Responsive",
-          "4": "Live"
-        },
-        "effectiveModeLabelPrefix": "Active mode",
-        "effectiveModeLabel": {
-          "frameLock": "Locked",
-          "blend": "Blended",
-          "live": "Live"
-        },
-        "motionScoreLabel": "Motion",
-        "enableRoiHint": "Enable subject tracking (ROI) to use these options."
-      },
-      "apply": "Apply"
-    },
     "blur": {
       "title": "Background blur",
+      "radius": "Blur intensity",
       "status": {
         "none": "Background clear.",
         "light": "Background slightly blurred.",
@@ -378,18 +316,6 @@
         "tech": "Technology",
         "childhood": "Childhood"
       }
-    },
-    "stats": {
-      "title": "Matting diagnostics",
-      "activeModel": "Active model",
-      "captureLatency": "Capture → display latency",
-      "maskGap": "Mask → rendered frame gap",
-      "inference": "Segmenter inference",
-      "fps": "FPS",
-      "fpsCamera": "camera",
-      "fpsRender": "render",
-      "fpsSegmenter": "segmenter",
-      "windowAvg": "avg of last {{n}}"
     },
     "matting": {
       "errors": {

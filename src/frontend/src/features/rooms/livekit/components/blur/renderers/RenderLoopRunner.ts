@@ -12,7 +12,6 @@ import {
   setEffectiveLatencyMode,
   setMotionScore,
   setMaskOffset,
-  setPredictionActive,
 } from '../stats/MattingStatsStore'
 
 export class RenderLoopRunner {
@@ -30,11 +29,7 @@ export class RenderLoopRunner {
     private getFrameTracker: () => VideoFrameTracker,
     private getLatestPair: () => FrameMaskPair | null,
     private getPassthroughMask: (w: number, h: number) => Float32Array,
-    private getLatencyParams: () => {
-      latencyMode: LatencyMode
-      latencyAuto: boolean
-      maskPrediction: boolean
-    },
+    private getLatencyParams: () => { latencyMode: LatencyMode },
     private getProcessingDimensions: () => { w: number; h: number }
   ) {}
 
@@ -104,7 +99,6 @@ export class RenderLoopRunner {
       setEffectiveLatencyMode(null)
       setMotionScore(0)
       setMaskOffset(0, 0)
-      setPredictionActive(false)
       this._drawPassthrough()
       return
     }
@@ -115,59 +109,17 @@ export class RenderLoopRunner {
     const motionScore = motionTracker.isValid() ? motionTracker.getMotionScore() : 0
     setMotionScore(motionScore)
 
-    const { latencyMode, latencyAuto, maskPrediction } = this.getLatencyParams()
+    const { latencyMode } = this.getLatencyParams()
     const latencyEngine = this.getLatencyEngine()
 
-    let effectiveMode: MaskBlendMode
-    let predictionGain: number
-    let blendT = 0
-
-    if (latencyAuto && motionTracker.isValid()) {
-      effectiveMode = latencyEngine.resolveAutoMode(motionScore)
-      if (maskPrediction && effectiveMode === 'frameLock') {
-        effectiveMode = 'blend'
-      }
-      predictionGain =
-        effectiveMode === 'live' ? 1.0 : effectiveMode === 'blend' ? 0.3 : 0
-      blendT = latencyEngine.computeBlendT(
-        latencyAuto,
-        motionTracker.isValid(),
-        motionScore,
-        maskPrediction,
-        effectiveMode,
-        latencyMode,
-        pair.captureTime
-      )
-    } else {
-      const entry = STATIC_MODE_TABLE[latencyMode]
-      effectiveMode = entry.mode
-      predictionGain = entry.predictionGain
-      blendT = latencyEngine.computeBlendT(
-        latencyAuto,
-        motionTracker.isValid(),
-        motionScore,
-        maskPrediction,
-        effectiveMode,
-        latencyMode,
-        pair.captureTime
-      )
-    }
+    const entry = STATIC_MODE_TABLE[latencyMode]
+    const effectiveMode: MaskBlendMode = entry.mode
+    const blendT = latencyEngine.computeBlendT(effectiveMode, pair.captureTime)
     latencyEngine.lastEffectiveMode = effectiveMode
     setEffectiveLatencyMode(effectiveMode)
 
-    const velocity = motionTracker.isValid() ? motionTracker.getVelocityUv() : { vx: 0, vy: 0 }
-    const { offsetU, offsetV, predictionWillRun } = latencyEngine.computePredictionOffset(
-      maskPrediction,
-      motionTracker.isValid(),
-      effectiveMode,
-      velocity,
-      pair.cameraCaptureTime,
-      predictionGain
-    )
-
-    gpuRenderer.setMaskOffset(offsetU, offsetV)
-    setMaskOffset(offsetU, offsetV)
-    setPredictionActive(predictionWillRun)
+    gpuRenderer.setMaskOffset(0, 0)
+    setMaskOffset(0, 0)
     gpuRenderer.setBlendMix(effectiveMode === 'blend' ? blendT : 0)
 
     if (effectiveMode === 'frameLock') {

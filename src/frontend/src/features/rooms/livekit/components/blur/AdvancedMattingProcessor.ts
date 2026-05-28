@@ -34,10 +34,7 @@ import {
 
 import { MattingCanvasManager } from './preprocessing/MattingCanvasManager'
 import { SegmenterBenchmarker } from './segmenters/SegmenterBenchmarker'
-import {
-  DynamicLatencyEngine,
-  DEFAULT_LATENCY_MODE,
-} from './stats/DynamicLatencyEngine'
+import { DynamicLatencyEngine } from './stats/DynamicLatencyEngine'
 import { VideoFrameTracker } from './preprocessing/VideoFrameTracker'
 import { SegmenterLoopRunner, FrameMaskPair } from './segmenters/SegmenterLoopRunner'
 import { RenderLoopRunner } from './renderers/RenderLoopRunner'
@@ -76,9 +73,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
   private _latestPair: FrameMaskPair | null = null
   private _segmenterFrameSkip = 2
 
-  private _latencyMode: LatencyMode = DEFAULT_LATENCY_MODE
-  private _latencyAuto = true
-  private _maskPrediction = false
+  private _latencyMode: LatencyMode = 0
 
   private _motionTracker = new MaskMotionTracker()
 
@@ -99,8 +94,6 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     this.type = opts.type
     const cfg = DynamicLatencyEngine.getLatencyConfig(opts)
     this._latencyMode = cfg.mode
-    this._latencyAuto = cfg.auto
-    this._maskPrediction = cfg.prediction
 
     this._initRunners()
   }
@@ -111,11 +104,9 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       () => this._preProcessingPipeline,
       () => this._canvasManager,
       () => this._frameTracker,
-      () => this._motionTracker,
       () => this._segmenterFrameSkip,
       () => ({ w: this.processingWidth, h: this.processingHeight }),
-      (pair) => this._onPairProduced(pair),
-      () => this._latencyAuto || this._maskPrediction
+      (pair) => this._onPairProduced(pair)
     )
 
     this._renderRunner = new RenderLoopRunner(
@@ -144,11 +135,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
   }
 
   getLatencyParams() {
-    return {
-      latencyMode: this._latencyMode,
-      latencyAuto: this._latencyAuto,
-      maskPrediction: this._maskPrediction,
-    }
+    return { latencyMode: this._latencyMode }
   }
 
   private _onPairProduced(pair: FrameMaskPair) {
@@ -276,15 +263,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     this.type = opts.type
     this.name = opts.type === ProcessorType.VIRTUAL ? 'virtual' : 'blur'
     const cfg = DynamicLatencyEngine.getLatencyConfig(opts)
-    const autoChanged = cfg.auto !== this._latencyAuto
-    const predictionChanged = cfg.prediction !== this._maskPrediction
     this._latencyMode = cfg.mode
-    this._latencyAuto = cfg.auto
-    this._maskPrediction = cfg.prediction
-    if (autoChanged || predictionChanged) {
-      this._motionTracker.reset()
-      this._latencyEngine.reset()
-    }
 
     if (!this.gpuRenderer) {
       return
@@ -293,8 +272,6 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     const prevConfigured = this._configuredModel
     const newModel = this._getModel(opts)
     this._configuredModel = newModel
-    const prevRvmRatio = this._getRvmRatio(this.options)
-    const nextRvmRatio = this._getRvmRatio(opts)
 
     this._initVirtualBackgroundImage()
 
@@ -304,12 +281,6 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       } else {
         this._initSegmenterBackground(newModel)
       }
-    } else if (
-      newModel === SegmentationModel.RVM &&
-      this.segmenter instanceof createSegmenter
-    ) {
-      // type checking fallback
-      (this.segmenter as any).setDownsampleRatio?.(nextRvmRatio ?? this._autoRvmRatio())
     }
     this._applyRendererConfig()
   }
@@ -333,23 +304,6 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       procW: this.processingWidth,
       procH: this.processingHeight,
     })
-  }
-
-  private _getRvmRatio(opts: ProcessorConfig): number | undefined {
-    if (
-      opts.type === ProcessorType.BLUR ||
-      opts.type === ProcessorType.VIRTUAL
-    ) {
-      return opts.rvmDownsampleRatio
-    }
-    return undefined
-  }
-
-  private _autoRvmRatio(): number {
-    const w = this.sourceSettings?.width ?? 1280
-    if (w > 1920) return 0.125
-    if (w >= 720) return 0.25
-    return 0.5
   }
 
   private _getPostProcessingConfig(): PostProcessingConfig {
@@ -433,10 +387,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       targetModel = SegmentationModel.MULTICLASS
     }
 
-    let seg = createSegmenter(targetModel, {
-      rvmDownsampleRatio:
-        this._getRvmRatio(this.options) ?? this._autoRvmRatio(),
-    })
+    let seg = createSegmenter(targetModel)
     await seg.init()
 
     if (this._destroyed || this._pendingModel !== model) {

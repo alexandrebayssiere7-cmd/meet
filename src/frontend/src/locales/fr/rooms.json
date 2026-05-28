@@ -254,71 +254,9 @@
     "notAvailable": "Les effets vidéo seront bientôt disponibles sur votre navigateur. Nous y travaillons ! En attendant, vous pouvez utiliser Google Chrome pour de meilleures performances ou Firefox :(",
     "heading": "Flou",
     "clear": "Désactiver l'effet",
-    "advanced": {
-      "title": "Paramètres avancés",
-      "model": {
-        "title": "Modèle de segmentation",
-        "auto": "Optimisé (automatique)",
-        "landscape": "Landscape (rapide)",
-        "multiclass": "Multiclass (qualité)",
-        "rvm": "RVM (récurrent, qualité supérieure)"
-      },
-      "rvmDownsample": {
-        "manual": "Downsample ratio manuel",
-        "label": "Downsample ratio (RVM)"
-      },
-      "sync": {
-        "title": "Synchronisation masque / frame"
-      },
-      "preProcessing": {
-        "title": "Pré-traitement",
-        "roiCropping": "Recadrage sur la personne (ROI)"
-      },
-      "postProcessing": {
-        "title": "Post-traitement",
-        "sigmoid": "Sigmoid",
-        "erosion": "Érosion des bords",
-        "ema": "EMA",
-        "opening": "Érosion-Dilatation (ouverture)",
-        "closing": "Dilatation-Érosion (fermeture)"
-      },
-      "upsampling": {
-        "title": "Suréchantillonnage",
-        "guidedFilter": "Guided Filter (GPU)"
-      },
-      "params": {
-        "sigmoidSteepness": "Pente sigmoid",
-        "sigmoidThreshold": "Seuil sigmoid",
-        "erosionPixels": "Pixels supprimés (bords)",
-        "emaAlpha": "Réactivité (EMA)",
-        "openingRadius": "Rayon ouverture (px)",
-        "closingRadius": "Rayon fermeture (px)",
-        "blurRadius": "Intensité du flou",
-        "upsamplingRadius": "Rayon (Guided Filter)",
-        "upsamplingEps": "Régularisation (Guided Filter)",
-        "latencyAuto": "Auto (adapte selon le mouvement)",
-        "maskPrediction": "Prédiction du masque (avancé)",
-        "latencyMode": "Compromis halo / latence",
-        "latencyModeValue": {
-          "0": "Verrouillé",
-          "1": "Stable",
-          "2": "Équilibré",
-          "3": "Réactif",
-          "4": "Live"
-        },
-        "effectiveModeLabelPrefix": "Mode actif",
-        "effectiveModeLabel": {
-          "frameLock": "Verrouillé",
-          "blend": "Mixte",
-          "live": "Live"
-        },
-        "motionScoreLabel": "Mouvement",
-        "enableRoiHint": "Activez le suivi du sujet (ROI) pour utiliser ces options."
-      },
-      "apply": "Appliquer"
-    },
     "blur": {
       "title": "Flou d'arrière-plan",
+      "radius": "Intensité du flou",
       "status": {
         "none": "Arrière-plan net.",
         "light": "Arrière-plan légèrement flouté.",
@@ -378,18 +316,6 @@
         "tech": "Technologie",
         "childhood": "Enfance"
       }
-    },
-    "stats": {
-      "title": "Diagnostics matting",
-      "activeModel": "Modèle actif",
-      "captureLatency": "Latence capture → écran",
-      "maskGap": "Écart masque → frame affichée",
-      "inference": "Inférence segmenter",
-      "fps": "FPS",
-      "fpsCamera": "caméra",
-      "fpsRender": "rendu",
-      "fpsSegmenter": "segmenter",
-      "windowAvg": "moy. sur {{n}}"
     },
     "matting": {
       "errors": {

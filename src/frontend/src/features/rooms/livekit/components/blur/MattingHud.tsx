@@ -8,8 +8,6 @@ const shortModel = (m: SegmentationModel | null): string => {
       return 'LS'
     case SegmentationModel.MULTICLASS:
       return 'MC'
-    case SegmentationModel.RVM:
-      return 'RVM'
     case SegmentationModel.AUTO:
       return 'AUTO'
     default:
@@ -79,10 +77,7 @@ export const MattingHud = ({ alwaysVisible = false }: MattingHudProps) => {
         {stats.segmenterFps.toFixed(0)} fps
       </div>
       {stats.effectiveLatencyMode !== null && (
-        <div>
-          mode {stats.effectiveLatencyMode}
-          {stats.predictionActive ? ' · pred' : ''}
-        </div>
+        <div>mode {stats.effectiveLatencyMode}</div>
       )}
       {stats.effectiveLatencyMode !== null && (
         <div>motion {stats.motionScoreUvPerSec.toFixed(2)}</div>

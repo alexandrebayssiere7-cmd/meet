@@ -5,11 +5,6 @@ import { PostProcessingConfig } from '..'
  * Resolved once by WebGl2Renderer._buildPrograms() and passed in at construction.
  */
 export interface MaskPostProcessorUniforms {
-  sigmoid: {
-    uTex: WebGLUniformLocation | null
-    uSteepness: WebGLUniformLocation | null
-    uThreshold: WebGLUniformLocation | null
-  }
   ema: {
     uTex: WebGLUniformLocation | null
     uPrev: WebGLUniformLocation | null
@@ -40,7 +35,7 @@ export interface MaskPostProcessorTextures {
 /**
  * Runs the low-resolution mask post-processing chain on the GPU.
  *
- * Pipeline: Sigmoid → Morphology (Opening / Closing) → Temporal EMA.
+ * Pipeline: Morphology (Opening / Closing) → Temporal EMA.
  *
  * Extracted verbatim from WebGl2Renderer._runPostProcessing() and
  * _applyMorphology(). No value, threshold, or GL call order has been changed.
@@ -53,7 +48,6 @@ export class MaskPostProcessor {
   constructor(
     private readonly gl: WebGL2RenderingContext,
     private readonly programs: {
-      sigmoid: WebGLProgram
       ema: WebGLProgram
       copyR: WebGLProgram
       morphology: WebGLProgram
@@ -63,11 +57,6 @@ export class MaskPostProcessor {
   ) {
     const loc = (p: WebGLProgram, n: string) => gl.getUniformLocation(p, n)
     this.uLoc = {
-      sigmoid: {
-        uTex: loc(programs.sigmoid, 'uTex'),
-        uSteepness: loc(programs.sigmoid, 'uSteepness'),
-        uThreshold: loc(programs.sigmoid, 'uThreshold'),
-      },
       ema: {
         uTex: loc(programs.ema, 'uTex'),
         uPrev: loc(programs.ema, 'uPrev'),
@@ -105,19 +94,6 @@ export class MaskPostProcessor {
     const advance = () => {
       src = dstTex === this.tex.maskA ? this.tex.maskA : this.tex.maskB
       swap()
-    }
-
-    // Sigmoid
-    if (postCfg.sigmoid) {
-      gl.bindFramebuffer(gl.FRAMEBUFFER, dstFbo)
-      gl.useProgram(this.programs.sigmoid)
-      gl.activeTexture(gl.TEXTURE0)
-      gl.bindTexture(gl.TEXTURE_2D, src)
-      gl.uniform1i(this.uLoc.sigmoid.uTex, 0)
-      gl.uniform1f(this.uLoc.sigmoid.uSteepness, postCfg.sigmoid.steepness)
-      gl.uniform1f(this.uLoc.sigmoid.uThreshold, postCfg.sigmoid.threshold)
-      this.drawQuad()
-      advance()
     }
 
     // Opening (Erosion then Dilation — removes small isolated specks at mask edges)

@@ -7,7 +7,6 @@ import { SegmoCompositor } from './SegmoCompositor'
 import {
   VS,
   FS_COPY_R,
-  FS_SIGMOID,
   FS_EMA,
   FS_MORPHOLOGY,
   FS_MASKED_DOWNSAMPLE,
@@ -26,7 +25,7 @@ import {
  * Pipeline per frame (`render(videoElement)`):
  *   videoTex ← upload from <video>
  *   maskTex  ← uploaded once per new mask (uploadMask)
- *   maskRefined ← post-processing chain (sigmoid → morpho → ema)
+ *   maskRefined ← post-processing chain (morpho → ema)
  *   bgBlur ← (mode === 'blur') maskedDownsample(videoTex, mask)
  *                              → maskWeightedGaussH → maskWeightedGaussV  (half-res)
  *           (mode === 'virtual') virtualBgTex
@@ -58,7 +57,6 @@ export class WebGl2Renderer implements GpuRenderer {
 
   // programs
   private pUploadMask!: WebGLProgram
-  private pSigmoid!: WebGLProgram
   private pEma!: WebGLProgram
   private pCopyR!: WebGLProgram
   private pMaskedDownsample!: WebGLProgram
@@ -187,7 +185,6 @@ export class WebGl2Renderer implements GpuRenderer {
       this.maskPostProcessor = new MaskPostProcessor(
         this.gl,
         {
-          sigmoid: this.pSigmoid,
           ema: this.pEma,
           copyR: this.pCopyR,
           morphology: this.pMorphology,
@@ -395,10 +392,6 @@ export class WebGl2Renderer implements GpuRenderer {
 
   setUpsampling(cfg: UpsamplingConfig) {
     this.upsamplingCfg = cfg
-    if (cfg.method !== 'guided') {
-      this.gf?.destroy()
-      this.gf = null
-    }
   }
 
   setMaskOffset(u: number, v: number) {
@@ -493,7 +486,7 @@ export class WebGl2Renderer implements GpuRenderer {
     // 2. Run post-processing chain on the mask at processing resolution.
     const procMaskTex = this.maskPostProcessor.run(this.postCfg, this.procW, this.procH)
 
-    // 3. Upsample mask to full output resolution (bilinear or guided filter).
+    // 3. Upsample mask to full output resolution (guided filter).
     const finalMaskTex = this._upsampleMask(procMaskTex)
 
     // 4. Build background (blurred camera or virtual image).
@@ -572,9 +565,6 @@ export class WebGl2Renderer implements GpuRenderer {
   }
 
   private _upsampleMask(procMaskTex: WebGLTexture): WebGLTexture {
-    if (this.upsamplingCfg.method !== 'guided') {
-      return procMaskTex
-    }
     if (!this.gf) {
       try {
         this.gf = new GpuGuidedFilter(this.gl, this.outW, this.outH)
@@ -625,7 +615,6 @@ export class WebGl2Renderer implements GpuRenderer {
     if (this.vao) gl.deleteVertexArray(this.vao)
     const programs = [
       this.pUploadMask,
-      this.pSigmoid,
       this.pEma,
       this.pCopyR,
       this.pMaskedDownsample,
@@ -740,7 +729,7 @@ export class WebGl2Renderer implements GpuRenderer {
    *
    * Intentionally does NOT include the erosion step from the standard compositor:
    * segmo's transition-zone matting subsumes that need. The user-selectable
-   * postprocess chain (sigmoid/morphology/EMA/guided-upsample) ran upstream and
+   * postprocess chain (morphology/EMA/guided-upsample) ran upstream and
    * is unaffected.
    */
   private _drawQuad() {
@@ -905,7 +894,6 @@ export class WebGl2Renderer implements GpuRenderer {
 
   private _buildPrograms() {
     this.pUploadMask = this._link(VS, FS_COPY_R)
-    this.pSigmoid = this._link(VS, FS_SIGMOID)
     this.pEma = this._link(VS, FS_EMA)
     this.pCopyR = this._link(VS, FS_COPY_R)
     this.pMaskedDownsample = this._link(VS, FS_MASKED_DOWNSAMPLE)

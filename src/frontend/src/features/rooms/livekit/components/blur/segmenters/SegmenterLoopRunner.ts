@@ -2,7 +2,6 @@ import { Segmenter } from './Segmenter'
 import { PreProcessingPipeline } from '../preprocessing/PreProcessingPipeline'
 import { MattingCanvasManager } from '../preprocessing/MattingCanvasManager'
 import { VideoFrameTracker } from '../preprocessing/VideoFrameTracker'
-import { MaskMotionTracker } from '../preprocessing/MaskMotionTracker'
 import { pushMattingError } from '../errors/MattingErrorStore'
 import { pushInferenceSample, tickSegmenterFrame } from '../stats/MattingStatsStore'
 
@@ -26,11 +25,9 @@ export class SegmenterLoopRunner {
     private getPreProcessingPipeline: () => PreProcessingPipeline | undefined,
     private getCanvasManager: () => MattingCanvasManager,
     private getFrameTracker: () => VideoFrameTracker,
-    private getMotionTracker: () => MaskMotionTracker,
     private getSegmenterFrameSkip: () => number,
     private getProcessingDimensions: () => { w: number; h: number },
-    private onPairProduced: (pair: FrameMaskPair) => void,
-    private isLatencyAutoOrPredictionEnabled: () => boolean
+    private onPairProduced: (pair: FrameMaskPair) => void
   ) {}
 
   start(videoElement: HTMLVideoElement) {
@@ -143,12 +140,6 @@ export class SegmenterLoopRunner {
           })
           capturedSource = null // ownership transferred
 
-          if (this.isLatencyAutoOrPredictionEnabled()) {
-            this.getMotionTracker().update(
-              prePipeline?.getCurrentBbox() ?? null,
-              cameraCaptureTime
-            )
-          }
         } else {
           capturedSource.close()
           capturedSource = null

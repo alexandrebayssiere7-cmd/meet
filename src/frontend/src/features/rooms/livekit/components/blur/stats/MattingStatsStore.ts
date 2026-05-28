@@ -30,7 +30,6 @@ export interface MattingStatsState {
   motionScoreUvPerSec: number
   effectiveLatencyMode: MaskBlendMode | null
   maskOffsetUv: { u: number; v: number }
-  predictionActive: boolean
   segmenterFrameSkip: number
 }
 
@@ -49,7 +48,6 @@ export const mattingStatsStore = proxy<MattingStatsState>({
   motionScoreUvPerSec: 0,
   effectiveLatencyMode: null,
   maskOffsetUv: { u: 0, v: 0 },
-  predictionActive: false,
   segmenterFrameSkip: 2,
 })
 
@@ -219,10 +217,6 @@ export function setMaskOffset(u: number, v: number): void {
   }
 }
 
-export function setPredictionActive(active: boolean): void {
-  mattingStatsStore.predictionActive = active
-}
-
 export function setSegmenterFrameSkip(skip: number): void {
   mattingStatsStore.segmenterFrameSkip = skip
 }
@@ -243,7 +237,6 @@ export function resetMattingStats(): void {
   mattingStatsStore.motionScoreUvPerSec = 0
   mattingStatsStore.effectiveLatencyMode = null
   mattingStatsStore.maskOffsetUv = { u: 0, v: 0 }
-  mattingStatsStore.predictionActive = false
   mattingStatsStore.segmenterFrameSkip = 2
   lastFlush = 0
   pendingFlush = false

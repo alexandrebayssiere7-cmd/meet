@@ -254,71 +254,9 @@
     "notAvailable": "Videoeffekte werden bald in deinem Browser verfügbar sein. Wir arbeiten daran! In der Zwischenzeit kannst du Google Chrome für die beste Leistung oder Firefox verwenden :(",
     "heading": "Unschärfe",
     "clear": "Effekt deaktivieren",
-    "advanced": {
-      "title": "Erweiterte Einstellungen",
-      "model": {
-        "title": "Segmentierungsmodell",
-        "auto": "Optimiert (automatisch)",
-        "landscape": "Landscape (schnell)",
-        "multiclass": "Multiclass (Qualität)",
-        "rvm": "RVM (rekurrent, höhere Qualität)"
-      },
-      "rvmDownsample": {
-        "manual": "Manuelles Downsample-Verhältnis",
-        "label": "Downsample-Verhältnis (RVM)"
-      },
-      "sync": {
-        "title": "Maske/Bild-Synchronisation"
-      },
-      "preProcessing": {
-        "title": "Vorverarbeitung",
-        "roiCropping": "Personenausschnitt (ROI)"
-      },
-      "postProcessing": {
-        "title": "Nachbearbeitung",
-        "sigmoid": "Sigmoid",
-        "erosion": "Kantenerosion",
-        "ema": "EMA",
-        "opening": "Erosion-Dilation (Öffnung)",
-        "closing": "Dilation-Erosion (Schließung)"
-      },
-      "upsampling": {
-        "title": "Hochskalierung",
-        "guidedFilter": "Guided Filter (GPU)"
-      },
-      "params": {
-        "sigmoidSteepness": "Sigmoid-Steilheit",
-        "sigmoidThreshold": "Sigmoid-Schwelle",
-        "erosionPixels": "Entfernte Pixel (Kanten)",
-        "emaAlpha": "Reaktivität (EMA)",
-        "openingRadius": "Öffnungsradius (px)",
-        "closingRadius": "Schließungsradius (px)",
-        "blurRadius": "Unschärfe-Intensität",
-        "upsamplingRadius": "Radius (Guided Filter)",
-        "upsamplingEps": "Regularisierung (Guided Filter)",
-        "latencyAuto": "Auto (an Bewegung anpassen)",
-        "maskPrediction": "Maskenvorhersage (erweitert)",
-        "latencyMode": "Halo- / Latenz-Kompromiss",
-        "latencyModeValue": {
-          "0": "Gesperrt",
-          "1": "Stabil",
-          "2": "Ausgewogen",
-          "3": "Reaktiv",
-          "4": "Live"
-        },
-        "effectiveModeLabelPrefix": "Aktiver Modus",
-        "effectiveModeLabel": {
-          "frameLock": "Gesperrt",
-          "blend": "Gemischt",
-          "live": "Live"
-        },
-        "motionScoreLabel": "Bewegung",
-        "enableRoiHint": "Aktivieren Sie das Personen-Tracking (ROI), um diese Optionen zu verwenden."
-      },
-      "apply": "Anwenden"
-    },
     "blur": {
       "title": "Hintergrundunschärfe",
+      "radius": "Unschärfe-Intensität",
       "status": {
         "none": "Hintergrund scharf.",
         "light": "Hintergrund leicht verschwommen.",
@@ -378,18 +316,6 @@
         "tech": "Technologie",
         "childhood": "Kindheit"
       }
-    },
-    "stats": {
-      "title": "Matting-Diagnose",
-      "activeModel": "Aktives Modell",
-      "captureLatency": "Latenz Aufnahme → Anzeige",
-      "maskGap": "Abstand Maske → angezeigtes Bild",
-      "inference": "Segmenter-Inferenz",
-      "fps": "FPS",
-      "fpsCamera": "Kamera",
-      "fpsRender": "Anzeige",
-      "fpsSegmenter": "Segmenter",
-      "windowAvg": "Ø der letzten {{n}}"
     },
     "matting": {
       "errors": {

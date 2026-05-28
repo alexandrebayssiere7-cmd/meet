@@ -27,19 +27,6 @@ void main() {
   fragColor = texture(uTex, vUv);
 }`
 
-export const FS_SIGMOID = `#version 300 es
-precision mediump float;
-in vec2 vUv;
-uniform sampler2D uTex;
-uniform float uSteepness;
-uniform float uThreshold;
-out vec4 fragColor;
-void main() {
-  float v = texture(uTex, vUv).r;
-  float y = 1.0 / (1.0 + exp(-uSteepness * (v - uThreshold)));
-  fragColor = vec4(y, 0.0, 0.0, 1.0);
-}`
-
 export const FS_EMA = `#version 300 es
 precision mediump float;
 in vec2 vUv;

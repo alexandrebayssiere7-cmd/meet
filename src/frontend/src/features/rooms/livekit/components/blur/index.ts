@@ -12,11 +12,9 @@ export enum SegmentationModel {
   AUTO = 'auto',
   LANDSCAPE = 'landscape',
   MULTICLASS = 'multiclass',
-  RVM = 'rvm',
 }
 
 export type PostProcessingConfig = {
-  sigmoid?: { steepness: number; threshold: number }
   erosion?: { pixels: number }
   opening?: { radius: number }
   closing?: { radius: number }
@@ -24,7 +22,6 @@ export type PostProcessingConfig = {
 }
 
 export type UpsamplingConfig = {
-  method?: 'bilinear' | 'guided'
   radius?: number
   eps?: number
 }
@@ -33,7 +30,7 @@ export type PreProcessingConfig = {
   roiCropping?: { enabled: boolean }
 }
 
-export type LatencyMode = 0 | 1 | 2 | 3 | 4
+export type LatencyMode = 0
 
 export type MaskBlendMode = 'frameLock' | 'live' | 'blend'
 
@@ -43,12 +40,9 @@ export type ProcessorConfig =
       blurRadius: number
       model?: SegmentationModel
       preProcessing?: PreProcessingConfig
-      rvmDownsampleRatio?: number
       postProcessing?: PostProcessingConfig
       upsampling?: UpsamplingConfig
       latencyMode?: LatencyMode
-      latencyAuto?: boolean
-      maskPrediction?: boolean
     }
   | {
       type: ProcessorType.VIRTUAL
@@ -56,12 +50,9 @@ export type ProcessorConfig =
       fileId?: string
       model?: SegmentationModel
       preProcessing?: PreProcessingConfig
-      rvmDownsampleRatio?: number
       postProcessing?: PostProcessingConfig
       upsampling?: UpsamplingConfig
       latencyMode?: LatencyMode
-      latencyAuto?: boolean
-      maskPrediction?: boolean
     }
   | ({ type: ProcessorType.FACE_LANDMARKS } & FaceLandmarksOptions)
 
