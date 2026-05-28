@@ -11,7 +11,6 @@ import {
 } from '.'
 import { PreProcessingPipeline } from './preprocessing/PreProcessingPipeline'
 import { MaskMotionTracker } from './preprocessing/MaskMotionTracker'
-import { BBox } from './preprocessing/RoiCropper'
 import {
   Segmenter,
   createSegmenter,
@@ -293,7 +292,6 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     const prevConfigured = this._configuredModel
     const newModel = this._getModel(opts)
     this._configuredModel = newModel
-    const prevRvmRatio = this._getRvmRatio(this.options)
     const nextRvmRatio = this._getRvmRatio(opts)
 
     this._initVirtualBackgroundImage()
@@ -309,7 +307,9 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       this.segmenter instanceof createSegmenter
     ) {
       // type checking fallback
-      (this.segmenter as any).setDownsampleRatio?.(nextRvmRatio ?? this._autoRvmRatio())
+      ;(
+        this.segmenter as { setDownsampleRatio?: (r: number) => void }
+      ).setDownsampleRatio?.(nextRvmRatio ?? this._autoRvmRatio())
     }
     this._applyRendererConfig()
   }
