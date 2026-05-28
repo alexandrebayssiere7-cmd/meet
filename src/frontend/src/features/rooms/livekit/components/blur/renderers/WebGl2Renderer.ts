@@ -110,6 +110,8 @@ export class WebGl2Renderer implements GpuRenderer {
 
   // Reusable CPU buffer for Float32→Uint8 mask conversion (avoids per-frame allocation).
   private u8MaskBuffer?: Uint8Array
+  private maskUpdated = false
+  private lastProcMaskTex: WebGLTexture | null = null
 
   // Cached uniform locations — resolved once in _buildPrograms(), reused every frame.
   // Eliminates ~43 string-lookup driver calls per frame.
@@ -243,6 +245,8 @@ export class WebGl2Renderer implements GpuRenderer {
       )
     }
     this.maskPostProcessor?.resetEmaState()
+    this.maskUpdated = true
+    this.lastProcMaskTex = null
   }
 
   resizeOutput(w: number, h: number) {
@@ -344,6 +348,8 @@ export class WebGl2Renderer implements GpuRenderer {
       canvas.width = w
       canvas.height = h
     }
+    this.maskUpdated = true
+    this.lastProcMaskTex = null
   }
 
   uploadMask(mask: Float32Array, w: number, h: number) {
@@ -363,6 +369,7 @@ export class WebGl2Renderer implements GpuRenderer {
     const gl = this.gl
     gl.bindTexture(gl.TEXTURE_2D, this.rawMaskTex)
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, w, h, gl.RED, gl.UNSIGNED_BYTE, u8)
+    this.maskUpdated = true
   }
 
   setVirtualBackground(img: HTMLImageElement | null) {
@@ -388,6 +395,8 @@ export class WebGl2Renderer implements GpuRenderer {
   setPostProcessing(cfg: PostProcessingConfig) {
     this.postCfg = cfg
     this.maskPostProcessor?.resetEmaState()
+    this.maskUpdated = true
+    this.lastProcMaskTex = null
   }
 
   setUpsampling(cfg: UpsamplingConfig) {
@@ -483,8 +492,15 @@ export class WebGl2Renderer implements GpuRenderer {
       if (!liveIsVideo) gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true)
     }
 
-    // 2. Run post-processing chain on the mask at processing resolution.
-    const procMaskTex = this.maskPostProcessor.run(this.postCfg, this.procW, this.procH)
+    // 2. Run post-processing chain on the mask only when a new mask is uploaded.
+    let procMaskTex: WebGLTexture
+    if (this.maskUpdated || !this.lastProcMaskTex) {
+      procMaskTex = this.maskPostProcessor.run(this.postCfg, this.procW, this.procH)
+      this.lastProcMaskTex = procMaskTex
+      this.maskUpdated = false
+    } else {
+      procMaskTex = this.lastProcMaskTex
+    }
 
     // 3. Upsample mask to full output resolution (guided filter).
     const finalMaskTex = this._upsampleMask(procMaskTex)
@@ -587,6 +603,7 @@ export class WebGl2Renderer implements GpuRenderer {
     if (!this.gl) return
     this.gf?.destroy()
     this.gf = null
+    this.lastProcMaskTex = null
     const gl = this.gl
     const tex = [
       this.videoTex,

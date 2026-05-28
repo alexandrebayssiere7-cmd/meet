@@ -11,7 +11,6 @@ import {
 } from '.'
 import { PreProcessingPipeline } from './preprocessing/PreProcessingPipeline'
 import { MaskMotionTracker } from './preprocessing/MaskMotionTracker'
-import { BBox } from './preprocessing/RoiCropper'
 import {
   Segmenter,
   createSegmenter,

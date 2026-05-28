@@ -211,38 +211,38 @@ export const EffectsConfiguration = ({
         processorConfig.type === ProcessorType.VIRTUAL) &&
       processorConfig.preProcessing) ||
     {}
-  const [roiCroppingEnabled, setRoiCroppingEnabled] = useState(
+  const [roiCroppingEnabled] = useState(
     initialPRE.roiCropping !== undefined
       ? !!initialPRE.roiCropping.enabled
       : true
   )
-  const [model, setModel] = useState<SegmentationModel>(initialModel)
-  const [erosionEnabled, setErosionEnabled] = useState(
+  const [model] = useState<SegmentationModel>(initialModel)
+  const [erosionEnabled] = useState(
     initialPP.erosion !== undefined ? !!initialPP.erosion : true
   )
-  const [erosionPixels, setErosionPixels] = useState<number>(
+  const [erosionPixels] = useState<number>(
     initialPP.erosion?.pixels ?? 3
   )
-  const [upsamplingRadius, setUpsamplingRadius] = useState<number>(
+  const [upsamplingRadius] = useState<number>(
     initialUP.radius ?? 8
   )
-  const [upsamplingEpsLog, setUpsamplingEpsLog] = useState<number>(
+  const [upsamplingEpsLog] = useState<number>(
     Math.log10(initialUP.eps ?? 0.01)
   )
-  const [emaEnabled, setEmaEnabled] = useState(
+  const [emaEnabled] = useState(
     initialPP.ema !== undefined ? !!initialPP.ema : true
   )
-  const [emaAlpha, setEmaAlpha] = useState<number>(initialPP.ema?.alpha ?? 0.6)
-  const [openingEnabled, setOpeningEnabled] = useState(
+  const [emaAlpha] = useState<number>(initialPP.ema?.alpha ?? 0.6)
+  const [openingEnabled] = useState(
     initialPP.opening !== undefined ? !!initialPP.opening : true
   )
-  const [openingRadius, setOpeningRadius] = useState<number>(
+  const [openingRadius] = useState<number>(
     initialPP.opening?.radius ?? 3
   )
-  const [closingEnabled, setClosingEnabled] = useState(
+  const [closingEnabled] = useState(
     initialPP.closing !== undefined ? !!initialPP.closing : true
   )
-  const [closingRadius, setClosingRadius] = useState<number>(
+  const [closingRadius] = useState<number>(
     initialPP.closing?.radius ?? 3
   )
   const isBlurOrVirtual =
@@ -252,7 +252,7 @@ export const EffectsConfiguration = ({
     isBlurOrVirtual && typeof processorConfig.latencyMode === 'number'
       ? (processorConfig.latencyMode as LatencyMode)
       : 0
-  const [latencyMode, setLatencyMode] =
+  const [latencyMode] =
     useState<LatencyMode>(initialLatencyMode)
 
   // Continuous blur radius slider; only meaningful when a blur effect is selected.
@@ -773,19 +773,19 @@ export const EffectsConfiguration = ({
       className={css(
         layout === 'vertical'
           ? {
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '1.5rem',
-            }
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '1.5rem',
+          }
           : {
-              display: 'flex',
-              gap: '1.5rem',
-              flexDirection: 'column',
-              md: {
-                flexDirection: 'row',
-                overflow: 'hidden',
-              },
-            }
+            display: 'flex',
+            gap: '1.5rem',
+            flexDirection: 'column',
+            md: {
+              flexDirection: 'row',
+              overflow: 'hidden',
+            },
+          }
       )}
     >
       <div
@@ -847,13 +847,13 @@ export const EffectsConfiguration = ({
         className={css(
           layout === 'horizontal'
             ? {
-                md: {
-                  borderLeft: '1px solid greyscale.250',
-                  paddingLeft: '1.5rem',
-                  width: '420px',
-                  flexShrink: 0,
-                },
-              }
+              md: {
+                borderLeft: '1px solid greyscale.250',
+                paddingLeft: '1.5rem',
+                width: '420px',
+                flexShrink: 0,
+              },
+            }
             : {}
         )}
       >
@@ -1102,8 +1102,8 @@ export const EffectsConfiguration = ({
                         (canUploadBackground &&
                           filesQ.data &&
                           filesQ.data.count >=
-                            (appConfig?.background_image?.max_count_by_user ??
-                              0)) ||
+                          (appConfig?.background_image?.max_count_by_user ??
+                            0)) ||
                         processorOptions.isDisabled ||
                         createFileMutation.isPending
                       }

@@ -16,11 +16,11 @@ import {
 
 export class RenderLoopRunner {
   private videoElement?: HTMLVideoElement
-  private outputCanvas?: HTMLCanvasElement
   private _renderLoopActive = false
   private _renderLoopHandle: number | null = null
   private _lastRenderedSeq = -1
   private _lastVideoTime = -1
+  private _lastUploadedPair: FrameMaskPair | null = null
 
   constructor(
     private getGpuRenderer: () => GpuRenderer | undefined,
@@ -31,14 +31,14 @@ export class RenderLoopRunner {
     private getPassthroughMask: (w: number, h: number) => Float32Array,
     private getLatencyParams: () => { latencyMode: LatencyMode },
     private getProcessingDimensions: () => { w: number; h: number }
-  ) {}
+  ) { }
 
-  start(videoElement: HTMLVideoElement, outputCanvas: HTMLCanvasElement) {
+  start(videoElement: HTMLVideoElement, _outputCanvas: HTMLCanvasElement) {
     this.videoElement = videoElement
-    this.outputCanvas = outputCanvas
     this._renderLoopActive = true
     this._lastRenderedSeq = -1
     this._lastVideoTime = -1
+    this._lastUploadedPair = null
     this._scheduleRender()
   }
 
@@ -46,7 +46,7 @@ export class RenderLoopRunner {
     this._renderLoopActive = false
     this._cancelRender()
     this.videoElement = undefined
-    this.outputCanvas = undefined
+    this._lastUploadedPair = null
   }
 
   private _scheduleRender(): void {
@@ -99,11 +99,15 @@ export class RenderLoopRunner {
       setEffectiveLatencyMode(null)
       setMotionScore(0)
       setMaskOffset(0, 0)
+      this._lastUploadedPair = null
       this._drawPassthrough()
       return
     }
 
-    gpuRenderer.uploadMask(pair.mask, pair.procW, pair.procH)
+    if (pair !== this._lastUploadedPair) {
+      gpuRenderer.uploadMask(pair.mask, pair.procW, pair.procH)
+      this._lastUploadedPair = pair
+    }
 
     const motionTracker = this.getMotionTracker()
     const motionScore = motionTracker.isValid() ? motionTracker.getMotionScore() : 0
