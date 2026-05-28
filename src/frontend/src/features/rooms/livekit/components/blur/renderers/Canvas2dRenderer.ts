@@ -179,10 +179,6 @@ export class Canvas2dRenderer implements GpuRenderer {
     const sh = this._sourceHeight(source)
     if (!sw || !sh) return
 
-    // ImageBitmap sources are pre-flipped vertically (imageOrientation:'flipY')
-    // by AMP so that the WebGL2 renderer (origin bottom-left) sees them right-side
-    // up. In Canvas2D (origin top-left) we must undo that flip.
-    const needsFlip = !('videoWidth' in source)
 
     // Ensure offscreen scratch canvases exist at output size.
     this._ensureScratchCanvases()
@@ -196,7 +192,7 @@ export class Canvas2dRenderer implements GpuRenderer {
     fgCtx.globalCompositeOperation = 'source-over'
     fgCtx.clearRect(0, 0, this.outW, this.outH)
     try {
-      this._drawFlipped(fgCtx, source, needsFlip)
+      fgCtx.drawImage(source, 0, 0, this.outW, this.outH)
     } catch {
       // Browser may throw if the source frame isn't ready yet — skip tick.
       return
@@ -214,7 +210,7 @@ export class Canvas2dRenderer implements GpuRenderer {
       // allowed in this codebase.
       bgCtx.filter = this.blurRadius > 0 ? `blur(${this.blurRadius}px)` : 'none'
       try {
-        this._drawFlipped(bgCtx, source, needsFlip)
+        bgCtx.drawImage(source, 0, 0, this.outW, this.outH)
       } catch {
         bgCtx.filter = 'none'
         return
@@ -322,22 +318,4 @@ export class Canvas2dRenderer implements GpuRenderer {
     return (s as HTMLVideoElement).videoHeight ?? (s as ImageBitmap).height ?? 0
   }
 
-  // Draw `source` into `ctx` at (0,0)→(outW,outH). When `flip` is true,
-  // mirror vertically to undo the imageOrientation:'flipY' baked into
-  // ImageBitmap sources by AMP for the WebGL2 renderer.
-  private _drawFlipped(
-    ctx: CanvasRenderingContext2D,
-    source: RenderSource,
-    flip: boolean
-  ): void {
-    if (!flip) {
-      ctx.drawImage(source, 0, 0, this.outW, this.outH)
-      return
-    }
-    ctx.save()
-    ctx.translate(0, this.outH)
-    ctx.scale(1, -1)
-    ctx.drawImage(source, 0, 0, this.outW, this.outH)
-    ctx.restore()
-  }
 }
