@@ -12,6 +12,7 @@ export enum SegmentationModel {
   AUTO = 'auto',
   LANDSCAPE = 'landscape',
   MULTICLASS = 'multiclass',
+  DEPTH_ANYTHING = 'depthAnything',
 }
 
 export type PostProcessingConfig = {

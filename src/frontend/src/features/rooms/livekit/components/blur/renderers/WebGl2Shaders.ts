@@ -168,6 +168,34 @@ void main() {
   fragColor = vec4(mix(bg, fg, t), 1.0);
 }`
 
+// ─────────────────────── Depth-of-field (True Bokeh) compositor ─────────────
+
+// Tier 1 compositor: uses a normalized depth map (1=near/person, 0=far/background)
+// produced by DepthAnythingSegmenter to blend the sharp camera frame with the
+// pre-blurred background. The wider smoothstep range vs. the binary composite
+// produces a natural bokeh falloff without hard edges.
+// Inputs:
+//   uVideo     – sharp camera frame (videoTex)
+//   uBlurredBg – pre-blurred background (bgBlurPongTex from the blur chain)
+//   uDepth     – normalized depth map from DepthAnythingSegmenter (maskTex upsampled)
+export const FS_DEPTH_BOKEH = `#version 300 es
+precision mediump float;
+in vec2 vUv;
+uniform sampler2D uVideo;
+uniform sampler2D uBlurredBg;
+uniform sampler2D uDepth;
+out vec4 fragColor;
+void main() {
+  float d = texture(uDepth, vUv).r;
+  // Near objects (high depth) stay sharp; far objects blur into the background.
+  // Asymmetric range: tighter on the near side to preserve subject sharpness,
+  // wider on the far side for organic bokeh falloff.
+  float t = smoothstep(0.20, 0.68, d);
+  vec3 sharp   = texture(uVideo, vUv).rgb;
+  vec3 blurred = texture(uBlurredBg, vUv).rgb;
+  fragColor = vec4(mix(blurred, sharp, t), 1.0);
+}`
+
 // ─────────────────────── Segmo virtual-background shaders ───────────────────
 
 // Segmo-style compositor for virtual backgrounds. Ported from

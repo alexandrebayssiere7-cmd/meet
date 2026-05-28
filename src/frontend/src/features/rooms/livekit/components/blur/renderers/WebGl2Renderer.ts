@@ -12,6 +12,7 @@ import {
   FS_MASKED_DOWNSAMPLE,
   FS_MASK_WEIGHTED_BLUR,
   FS_COMPOSITE,
+  FS_DEPTH_BOKEH,
   FS_COMPOSITE_SEGMO,
   FS_SEGMO_EDGE_FEATHER,
   FS_LIGHT_WRAP,
@@ -63,6 +64,8 @@ export class WebGl2Renderer implements GpuRenderer {
   private pMaskWeightedBlur!: WebGLProgram
   private pMorphology!: WebGLProgram
   private pComposite!: WebGLProgram
+  private pDepthBokeh!: WebGLProgram
+  private _depthBokehMode = false
   // Segmo-style virtual-background compositor (foreground recovery + edge-adaptive
   // sharpening + closed-form alpha matting). Used ONLY when mode === 'virtual' and
   // a virtual background image is uploaded. Never runs in the blur path.
@@ -137,6 +140,11 @@ export class WebGl2Renderer implements GpuRenderer {
       uLiveVideo: WebGLUniformLocation | null
       uBlendT: WebGLUniformLocation | null
       uMaskOffset: WebGLUniformLocation | null
+    }
+    depthBokeh: {
+      uVideo: WebGLUniformLocation | null
+      uBlurredBg: WebGLUniformLocation | null
+      uDepth: WebGLUniformLocation | null
     }
   }
 
@@ -416,6 +424,10 @@ export class WebGl2Renderer implements GpuRenderer {
     this.blendMix = t < 0 ? 0 : t > 1 ? 1 : t
   }
 
+  setDepthBokehMode(enabled: boolean) {
+    this._depthBokehMode = enabled
+  }
+
   render(source: RenderSource, liveSource?: RenderSource) {
     if (!source) return
     const isVideo = 'videoWidth' in source
@@ -508,7 +520,29 @@ export class WebGl2Renderer implements GpuRenderer {
     // 4. Build background (blurred camera or virtual image).
     const bgTex = this._buildBackground(finalMaskTex)
 
-    // 5. Composite — segmo-style path is taken ONLY for virtual mode with an
+    // 5a. Depth-bokeh composite (Tier 1 — DepthAnythingSegmenter).
+    //    Uses the depth map (finalMaskTex) to blend sharp camera with blurred BG.
+    //    The existing blur pass (_buildBackground) already produced bgTex using
+    //    the depth map as a weight, so the background is naturally depth-weighted.
+    if (this._depthBokehMode) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+      gl.viewport(0, 0, this.outW, this.outH)
+      gl.useProgram(this.pDepthBokeh)
+      gl.activeTexture(gl.TEXTURE0)
+      gl.bindTexture(gl.TEXTURE_2D, this.videoTex)
+      gl.uniform1i(this.uLoc.depthBokeh.uVideo, 0)
+      gl.activeTexture(gl.TEXTURE1)
+      gl.bindTexture(gl.TEXTURE_2D, bgTex)
+      gl.uniform1i(this.uLoc.depthBokeh.uBlurredBg, 1)
+      gl.activeTexture(gl.TEXTURE2)
+      gl.bindTexture(gl.TEXTURE_2D, finalMaskTex)
+      gl.uniform1i(this.uLoc.depthBokeh.uDepth, 2)
+      this._drawQuad()
+      gl.flush()
+      return
+    }
+
+    // 5b. Composite — segmo-style path is taken ONLY for virtual mode with an
     //    uploaded virtual background. The blur path (and the virtual-no-image
     //    fallback, which currently returns the blurred camera) falls through to
     //    the original composite below, unchanged.
@@ -638,6 +672,7 @@ export class WebGl2Renderer implements GpuRenderer {
       this.pMaskWeightedBlur,
       this.pMorphology,
       this.pComposite,
+      this.pDepthBokeh,
       this.pCompositeSegmo,
       this.pSegmoEdgeFeather,
       this.pLightWrap,
@@ -917,6 +952,7 @@ export class WebGl2Renderer implements GpuRenderer {
     this.pMaskWeightedBlur = this._link(VS, FS_MASK_WEIGHTED_BLUR)
     this.pMorphology = this._link(VS, FS_MORPHOLOGY)
     this.pComposite = this._link(VS, FS_COMPOSITE)
+    this.pDepthBokeh = this._link(VS, FS_DEPTH_BOKEH)
     this.pCompositeSegmo = this._link(VS, FS_COMPOSITE_SEGMO)
     this.pSegmoEdgeFeather = this._link(VS, FS_SEGMO_EDGE_FEATHER)
     this.pLightWrap = this._link(VS, FS_LIGHT_WRAP)
@@ -948,6 +984,11 @@ export class WebGl2Renderer implements GpuRenderer {
         uLiveVideo: loc(this.pComposite, 'uLiveVideo'),
         uBlendT: loc(this.pComposite, 'uBlendT'),
         uMaskOffset: loc(this.pComposite, 'uMaskOffset'),
+      },
+      depthBokeh: {
+        uVideo: loc(this.pDepthBokeh, 'uVideo'),
+        uBlurredBg: loc(this.pDepthBokeh, 'uBlurredBg'),
+        uDepth: loc(this.pDepthBokeh, 'uDepth'),
       },
     }
   }

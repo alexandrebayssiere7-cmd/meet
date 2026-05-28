@@ -14,6 +14,7 @@ import { MaskMotionTracker } from './preprocessing/MaskMotionTracker'
 import {
   Segmenter,
   createSegmenter,
+  DepthAnythingSegmenter,
 } from './segmenters'
 import { GpuRenderer, GpuRendererInitOpts } from './renderers/GpuRenderer'
 import { WebGl2Renderer } from './renderers/WebGl2Renderer'
@@ -381,6 +382,48 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     seg: Segmenter
     targetModel: SegmentationModel
   } | undefined> {
+    // ── Tier 1 probe: DepthAnything via WebGPU (AUTO mode only) ────────────
+    if (model === SegmentationModel.AUTO) {
+      console.log('[AMP] Tier 1 probe: checking WebGPU availability...')
+      const webgpuAvailable = await SegmenterBenchmarker.probeWebGPU()
+      console.log(`[AMP] Tier 1 probe: WebGPU available = ${webgpuAvailable}`)
+
+      if (webgpuAvailable && !this._destroyed && this._pendingModel === model) {
+        const t1Seg = new DepthAnythingSegmenter()
+        try {
+          await t1Seg.init()
+          if (this._destroyed || this._pendingModel !== model) {
+            t1Seg.destroy()
+            return undefined
+          }
+          console.log('[AMP] Tier 1: model loaded, running benchmark (15 warm-up + timed runs)...')
+          const t1P75 = await SegmenterBenchmarker.measureInferenceP75(
+            t1Seg,
+            this.videoElement,
+            (mask, source, time) => this._publishBenchmarkPair(mask, source, time),
+            () => this._destroyed || this._pendingModel !== model
+          )
+          if (!this._destroyed && this._pendingModel === model && t1P75 !== null && t1P75 < 80) {
+            console.log(`[AMP] Tier 1 SELECTED — Depth Anything V2 (WebGPU) | P75=${t1P75.toFixed(1)}ms | skip=2 (15 FPS inference / 30 FPS render)`)
+            this._segmenterFrameSkip = 2
+            return { seg: t1Seg, targetModel: SegmentationModel.DEPTH_ANYTHING }
+          }
+          console.warn(
+            t1P75 === null
+              ? '[AMP] Tier 1 rejected: benchmark aborted — falling back to Tier 2 (Multiclass MediaPipe)'
+              : `[AMP] Tier 1 rejected: P75=${t1P75.toFixed(1)}ms ≥ 80ms threshold — falling back to Tier 2 (Multiclass MediaPipe)`
+          )
+        } catch (e) {
+          console.warn('[AMP] Tier 1 rejected: init failed — falling back to Tier 2 (Multiclass MediaPipe)', e)
+        }
+        t1Seg.destroy()
+        if (this._destroyed || this._pendingModel !== model) return undefined
+      } else if (!webgpuAvailable) {
+        console.log('[AMP] Tier 1 skipped: no WebGPU — using Tier 2 (Multiclass MediaPipe)')
+      }
+    }
+
+    // ── Tier 2 / Tier 3: existing MediaPipe logic ───────────────────────────
     let targetModel = model
     if (model === SegmentationModel.AUTO) {
       targetModel = SegmentationModel.MULTICLASS
@@ -436,6 +479,12 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     return { seg, targetModel }
   }
 
+  private _applyDepthBokehMode(targetModel: SegmentationModel) {
+    const isDepth = targetModel === SegmentationModel.DEPTH_ANYTHING
+    console.log(`[AMP] renderer mode: ${isDepth ? 'DEPTH BOKEH (True Bokeh shader — FS_DEPTH_BOKEH)' : 'STANDARD BLUR/VIRTUAL'}`)
+    this.gpuRenderer?.setDepthBokehMode?.(isDepth)
+  }
+
   private async _initSegmenterBackground(model: SegmentationModel) {
     if (this._destroyed) return
     this._pendingModel = model
@@ -451,6 +500,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       setSegmenterFrameSkip(this._segmenterFrameSkip)
       this.processingWidth = result.seg.inputSize.width
       this.processingHeight = result.seg.inputSize.height
+      this._applyDepthBokehMode(result.targetModel)
       this._resizeMaskIfNeeded()
       this._resolveReady()
     } catch (e) {
@@ -482,6 +532,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       setSegmenterFrameSkip(this._segmenterFrameSkip)
       this.processingWidth = result.seg.inputSize.width
       this.processingHeight = result.seg.inputSize.height
+      this._applyDepthBokehMode(result.targetModel)
       old?.destroy()
       this._resizeMaskIfNeeded()
       this._resolveReady()

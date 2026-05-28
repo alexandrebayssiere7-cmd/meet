@@ -28,7 +28,7 @@ export class SegmenterLoopRunner {
     private getSegmenterFrameSkip: () => number,
     private getProcessingDimensions: () => { w: number; h: number },
     private onPairProduced: (pair: FrameMaskPair) => void
-  ) {}
+  ) { }
 
   start(videoElement: HTMLVideoElement) {
     this.videoElement = videoElement
@@ -122,11 +122,11 @@ export class SegmenterLoopRunner {
         if (this.getSegmenter() === seg) {
           const mask = prePipeline
             ? prePipeline.applyAfterInference(
-                rawMask,
-                dims.w,
-                dims.h,
-                cropBbox
-              )
+              rawMask,
+              dims.w,
+              dims.h,
+              cropBbox
+            )
             : rawMask
           this._lastMask = mask
 

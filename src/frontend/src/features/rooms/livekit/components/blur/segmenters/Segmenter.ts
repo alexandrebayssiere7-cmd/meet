@@ -15,6 +15,8 @@ export interface Segmenter {
   segment(imageData: ImageData, timestampMs: number): Promise<Float32Array>
   destroy(): void
   readonly inputSize: { width: number; height: number }
+  /** 'binary': 1=person 0=background. 'depth': normalized depth (1=near 0=far). */
+  readonly maskType?: 'binary' | 'depth'
 }
 
 const MEDIAPIPE_WASM_URL =

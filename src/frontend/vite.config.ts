@@ -10,6 +10,11 @@ export default defineConfig(({ mode }) => {
     build: {
       sourcemap: env.VITE_BUILD_SOURCEMAP === 'true',
     },
+    optimizeDeps: {
+      // onnxruntime-web ships pre-bundled WASM workers that Vite's optimizer
+      // breaks — exclude it so it's loaded as-is from node_modules.
+      exclude: ['onnxruntime-web'],
+    },
     server: {
       port: parseInt(env.VITE_PORT) || 3000,
       host: env.VITE_HOST ?? 'localhost',

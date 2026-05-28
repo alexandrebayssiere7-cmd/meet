@@ -41,6 +41,13 @@ export interface GpuRenderer {
   setMaskOffset(u: number, v: number): void
   /** Blend ratio between frame-locked source and live source (0..1). */
   setBlendMix(t: number): void
+  /**
+   * When true, the renderer uses the FS_DEPTH_BOKEH shader for compositing:
+   * the mask channel is interpreted as a normalized depth map (1=near, 0=far)
+   * and produces depth-of-field blur instead of hard foreground/background split.
+   * Optional — renderers that don't support it (Canvas2D) silently ignore it.
+   */
+  setDepthBokehMode?(enabled: boolean): void
   render(source: RenderSource, liveSource?: RenderSource): void
   /** Read a small RGBA8 patch — used by preflight diagnostics. */
   readPixels(x: number, y: number, w: number, h: number): Uint8Array

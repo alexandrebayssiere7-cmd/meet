@@ -183,7 +183,7 @@ export class FaceLandmarksProcessor implements TrackProcessor<Track.Kind> {
     // Calculate distance between points
     const distance = Math.sqrt(
       Math.pow(rightPoint.x - leftPoint.x, 2) +
-        Math.pow(rightPoint.y - leftPoint.y, 2)
+      Math.pow(rightPoint.y - leftPoint.y, 2)
     )
 
     // Scale image based on distance

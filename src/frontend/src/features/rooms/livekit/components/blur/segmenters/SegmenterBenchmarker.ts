@@ -1,7 +1,33 @@
 import { Segmenter, probeMediapipeDelegate } from './Segmenter'
 import { debugLog, debugWarn } from '../debug'
 
+let _webgpuProbe: Promise<boolean> | null = null
+
 export class SegmenterBenchmarker {
+  /**
+   * Probes whether a WebGPU adapter is available.
+   * Memoised per session — calling it multiple times is safe.
+   *
+   * Tier logic:
+   *   Tier 1 → DepthAnything (WebGPU) — if probeWebGPU() returns true and init succeeds
+   *   Tier 2 → Multiclass MediaPipe  — GPU delegate, 15 FPS (skip=2)
+   *   Tier 3 → Landscape MediaPipe   — CPU fallback
+   */
+  static probeWebGPU(): Promise<boolean> {
+    if (_webgpuProbe) return _webgpuProbe
+    _webgpuProbe = (async () => {
+      if (!('gpu' in navigator)) return false
+      try {
+        const adapter = await (navigator as unknown as { gpu: GPU }).gpu.requestAdapter()
+        return adapter !== null
+      } catch {
+        return false
+      }
+    })()
+    return _webgpuProbe
+  }
+
+
   /**
    * Common measurement protocol: 5 warm-up runs (displayed but not timed) +
    * 15 timed runs on fresh video frames. Returns p75 latency in ms, or null
