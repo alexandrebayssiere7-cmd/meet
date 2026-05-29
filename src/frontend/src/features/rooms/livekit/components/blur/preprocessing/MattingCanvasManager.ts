@@ -17,18 +17,6 @@ export class MattingCanvasManager {
   public static readonly MOTION_W = 128
   public static readonly MOTION_H = 72
 
-  get segmentationMaskCanvas(): HTMLCanvasElement | undefined {
-    return this._segmentationMaskCanvas
-  }
-
-  get segmentationMaskCanvasCtx(): CanvasRenderingContext2D | undefined {
-    return this._segmentationMaskCanvasCtx
-  }
-
-  get snapshotCanvas(): HTMLCanvasElement | undefined {
-    return this._snapshotCanvas
-  }
-
   /**
    * Ensures the snapshot canvas exists and matches the current video size,
    * then draws the current video frame into it. Synchronous → defines the

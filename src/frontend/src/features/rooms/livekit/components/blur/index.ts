@@ -30,10 +30,6 @@ export type PreProcessingConfig = {
   roiCropping?: { enabled: boolean }
 }
 
-export type LatencyMode = 0
-
-export type MaskBlendMode = 'frameLock' | 'live' | 'blend'
-
 export type ProcessorConfig =
   | {
       type: ProcessorType.BLUR
@@ -42,7 +38,6 @@ export type ProcessorConfig =
       preProcessing?: PreProcessingConfig
       postProcessing?: PostProcessingConfig
       upsampling?: UpsamplingConfig
-      latencyMode?: LatencyMode
     }
   | {
       type: ProcessorType.VIRTUAL
@@ -52,7 +47,6 @@ export type ProcessorConfig =
       preProcessing?: PreProcessingConfig
       postProcessing?: PostProcessingConfig
       upsampling?: UpsamplingConfig
-      latencyMode?: LatencyMode
     }
   | ({ type: ProcessorType.FACE_LANDMARKS } & FaceLandmarksOptions)
 

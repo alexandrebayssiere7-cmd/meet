@@ -1,7 +1,6 @@
 /**
  * Debug logging for the matting pipeline. Silent by default in production.
- * Opted in via the `?mattingDebug=1` query string (also enabled when the
- * `?mattingHud=1` overlay is on, so HUD users get the matching console output).
+ * Opted in via the `?mattingDebug=1` query string 
  */
 let cached: boolean | null = null
 
@@ -17,7 +16,7 @@ export const mattingDebugEnabled = (): boolean => {
       const v = params.get(key)
       return v === '1' || v === 'true'
     }
-    cached = on('mattingDebug') || on('mattingHud')
+    cached = on('mattingDebug')
   } catch {
     cached = false
   }
@@ -30,8 +29,4 @@ export const debugLog = (...args: unknown[]): void => {
 
 export const debugWarn = (...args: unknown[]): void => {
   if (mattingDebugEnabled()) console.warn(...args)
-}
-
-export const debugInfo = (...args: unknown[]): void => {
-  if (mattingDebugEnabled()) console.info(...args)
 }

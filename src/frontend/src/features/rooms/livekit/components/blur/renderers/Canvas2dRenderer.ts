@@ -153,27 +153,9 @@ export class Canvas2dRenderer implements GpuRenderer {
     if (this.emaAlpha === 0) this.emaPrevMask = null
   }
 
-  setUpsampling(cfg: UpsamplingConfig): void {
-    // No-op: Canvas2D upsamples the mask via drawImage with imageSmoothing,
-    // which is bilinear. Guided filter is not reproduced on CPU.
-    void cfg
-  }
+  setUpsampling(_cfg: UpsamplingConfig): void {}
 
-  setMaskOffset(u: number, v: number): void {
-    // No-op: prediction warp would require pixel-shifting the mask draw, which
-    // costs as much as the rest of the pipeline. Acceptable to skip on fallback.
-    void u
-    void v
-  }
-
-  setBlendMix(t: number): void {
-    // No-op: live/blend modes use a second source texture; on the fallback we
-    // always composite against the primary source.
-    void t
-  }
-
-  render(source: RenderSource, liveSource?: RenderSource): void {
-    void liveSource
+  render(source: RenderSource): void {
     if (!source) return
     const sw = this._sourceWidth(source)
     const sh = this._sourceHeight(source)
@@ -241,11 +223,6 @@ export class Canvas2dRenderer implements GpuRenderer {
     this.ctx.drawImage(fg, 0, 0)
   }
 
-  readPixels(x: number, y: number, w: number, h: number): Uint8Array {
-    const data = this.ctx.getImageData(x, y, w, h).data
-    return new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
-  }
-
   destroy(): void {
     this.emaPrevMask = null
     this.bgCanvas = null
@@ -311,11 +288,11 @@ export class Canvas2dRenderer implements GpuRenderer {
   }
 
   private _sourceWidth(s: RenderSource): number {
-    return (s as HTMLVideoElement).videoWidth ?? (s as ImageBitmap).width ?? 0
+    return 'videoWidth' in s ? s.videoWidth : (s as ImageBitmap).width
   }
 
   private _sourceHeight(s: RenderSource): number {
-    return (s as HTMLVideoElement).videoHeight ?? (s as ImageBitmap).height ?? 0
+    return 'videoHeight' in s ? s.videoHeight : (s as ImageBitmap).height
   }
 
 }

@@ -133,7 +133,6 @@ function resizeFloat32Into(
  */
 export class RoiCropper {
   private currentBbox: BBox = { ...FULL_FRAME }
-  private hasMask = false
   private frameCounter = 0
   private prevLuma: Uint8Array | null = null
   private cooldownFrames = 0
@@ -271,7 +270,6 @@ export class RoiCropper {
 
   /** Update internal state from the full-frame mask produced this frame. */
   updateWithMask(fullMask: Float32Array, maskW: number, maskH: number): void {
-    this.hasMask = true
     const raw = computePersonBbox(fullMask, maskW, maskH)
     if (!raw) {
       // No person detected — keep current bbox so the crop doesn't jump to full frame.
@@ -282,19 +280,10 @@ export class RoiCropper {
 
   reset(): void {
     this.currentBbox = { ...FULL_FRAME }
-    this.hasMask = false
     this.frameCounter = 0
     this.prevLuma = null
     this.cooldownFrames = 0
     this._resizeBuf = null
     this._fullBuf = null
-  }
-
-  getCurrentBbox(): BBox {
-    return this.currentBbox
-  }
-
-  isInitialised(): boolean {
-    return this.hasMask
   }
 }

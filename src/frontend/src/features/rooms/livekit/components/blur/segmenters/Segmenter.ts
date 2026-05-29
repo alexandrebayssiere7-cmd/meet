@@ -3,7 +3,6 @@ import { FilesetResolver, ImageSegmenter } from '@mediapipe/tasks-vision'
 type MediapipeFileset = Awaited<
   ReturnType<typeof FilesetResolver.forVisionTasks>
 >
-import { pushMattingError } from '../errors/MattingErrorStore'
 
 /**
  * Segmenter: abstracts the segmentation model behind a uniform interface.
@@ -84,11 +83,7 @@ export function probeMediapipeDelegate(): Promise<'GPU' | 'CPU'> {
       probe.close()
       return 'GPU'
     } catch (e) {
-      pushMattingError({
-        code: 'MEDIAPIPE_GPU_FALLBACK_TO_CPU',
-        level: 'info',
-        detail: e instanceof Error ? e.message : String(e),
-      })
+      console.info('[matting:MEDIAPIPE_GPU_FALLBACK_TO_CPU]', e instanceof Error ? e.message : String(e))
       return 'CPU'
     }
   })()

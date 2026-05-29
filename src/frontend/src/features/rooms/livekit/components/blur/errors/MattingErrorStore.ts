@@ -2,17 +2,10 @@ import { proxy, useSnapshot } from 'valtio'
 
 export type MattingErrorCode =
   | 'MEDIAPIPE_INIT_FAILED'
-  | 'MEDIAPIPE_GPU_FALLBACK_TO_CPU'
   | 'WEBGL2_INIT_FAILED'
-  | 'WEBGPU_FALLBACK'
   | 'CAPTURESTREAM_UNSUPPORTED'
-  | 'SEGMENTER_TIMEOUT_PASSTHROUGH'
-  | 'SEGMENTER_PRODUCING_DEGENERATE_MASK'
-  | 'GUIDED_FILTER_INIT_FAILED'
   | 'POSTPROCESS_SHADER_COMPILE_FAILED'
   | 'VIRTUAL_BG_LOAD_FAILED'
-  | 'RVM_INIT_FAILED'
-  | 'RVM_INFERENCE_FAILED'
   | 'CANVAS2D_FALLBACK'
 
 export type MattingErrorLevel = 'info' | 'warn' | 'error'
@@ -49,10 +42,6 @@ export function pushMattingError(e: MattingError) {
 export function dismissMattingError(code: MattingErrorCode) {
   const i = mattingErrorStore.errors.findIndex((x) => x.code === code)
   if (i >= 0) mattingErrorStore.errors.splice(i, 1)
-}
-
-export function clearMattingErrors() {
-  mattingErrorStore.errors.length = 0
 }
 
 export function useMattingErrors(): readonly MattingError[] {

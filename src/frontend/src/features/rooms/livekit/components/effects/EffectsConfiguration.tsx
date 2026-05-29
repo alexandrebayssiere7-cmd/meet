@@ -4,7 +4,6 @@ import { useTranslation } from 'react-i18next'
 import {
   BackgroundProcessorFactory,
   BackgroundProcessorInterface,
-  LatencyMode,
   PostProcessingConfig,
   PreProcessingConfig,
   UpsamplingConfig,
@@ -187,74 +186,19 @@ export const EffectsConfiguration = ({
   } = usePersistentUserChoices()
 
   // ----- Advanced matting settings (model + pre/post-processing toggles) -----
-  const initialModel: SegmentationModel =
-    (processorConfig &&
-      (processorConfig.type === ProcessorType.BLUR ||
-        processorConfig.type === ProcessorType.VIRTUAL) &&
-      processorConfig.model) ||
-    SegmentationModel.AUTO
-  const initialPP: PostProcessingConfig =
-    (processorConfig &&
-      (processorConfig.type === ProcessorType.BLUR ||
-        processorConfig.type === ProcessorType.VIRTUAL) &&
-      processorConfig.postProcessing) ||
-    {}
-  const initialUP: UpsamplingConfig =
-    (processorConfig &&
-      (processorConfig.type === ProcessorType.BLUR ||
-        processorConfig.type === ProcessorType.VIRTUAL) &&
-      processorConfig.upsampling) ||
-    {}
-  const initialPRE: PreProcessingConfig =
-    (processorConfig &&
-      (processorConfig.type === ProcessorType.BLUR ||
-        processorConfig.type === ProcessorType.VIRTUAL) &&
-      processorConfig.preProcessing) ||
-    {}
-  const [roiCroppingEnabled, setRoiCroppingEnabled] = useState(
-    initialPRE.roiCropping !== undefined
-      ? !!initialPRE.roiCropping.enabled
-      : true
-  )
-  const [model, setModel] = useState<SegmentationModel>(initialModel)
-  const [erosionEnabled, setErosionEnabled] = useState(
-    initialPP.erosion !== undefined ? !!initialPP.erosion : true
-  )
-  const [erosionPixels, setErosionPixels] = useState<number>(
-    initialPP.erosion?.pixels ?? 3
-  )
-  const [upsamplingRadius, setUpsamplingRadius] = useState<number>(
-    initialUP.radius ?? 8
-  )
-  const [upsamplingEpsLog, setUpsamplingEpsLog] = useState<number>(
-    Math.log10(initialUP.eps ?? 0.01)
-  )
-  const [emaEnabled, setEmaEnabled] = useState(
-    initialPP.ema !== undefined ? !!initialPP.ema : true
-  )
-  const [emaAlpha, setEmaAlpha] = useState<number>(initialPP.ema?.alpha ?? 0.6)
-  const [openingEnabled, setOpeningEnabled] = useState(
-    initialPP.opening !== undefined ? !!initialPP.opening : true
-  )
-  const [openingRadius, setOpeningRadius] = useState<number>(
-    initialPP.opening?.radius ?? 3
-  )
-  const [closingEnabled, setClosingEnabled] = useState(
-    initialPP.closing !== undefined ? !!initialPP.closing : true
-  )
-  const [closingRadius, setClosingRadius] = useState<number>(
-    initialPP.closing?.radius ?? 3
-  )
-  const isBlurOrVirtual =
-    processorConfig?.type === ProcessorType.BLUR ||
-    processorConfig?.type === ProcessorType.VIRTUAL
-  const initialLatencyMode: LatencyMode =
-    isBlurOrVirtual && typeof processorConfig.latencyMode === 'number'
-      ? (processorConfig.latencyMode as LatencyMode)
-      : 0
-  const [latencyMode, setLatencyMode] =
-    useState<LatencyMode>(initialLatencyMode)
-
+  // These are the defaults used until a UI is built to expose them.
+  const model: SegmentationModel = SegmentationModel.AUTO
+  const roiCroppingEnabled = true
+  const erosionEnabled = true
+  const erosionPixels = 3
+  const upsamplingRadius = 8
+  const upsamplingEpsLog = Math.log10(0.01)
+  const emaEnabled = true
+  const emaAlpha = 0.6
+  const openingEnabled = true
+  const openingRadius = 3
+  const closingEnabled = true
+  const closingRadius = 3
   // Continuous blur radius slider; only meaningful when a blur effect is selected.
   const initialBlurRadius =
     processorConfig?.type === ProcessorType.BLUR
@@ -309,7 +253,6 @@ export const EffectsConfiguration = ({
           preProcessing: buildPreProcessing(),
           postProcessing: buildPostProcessing(),
           upsampling: buildUpsampling(),
-          latencyMode,
         }
       }
       return config
@@ -319,7 +262,6 @@ export const EffectsConfiguration = ({
       buildPreProcessing,
       buildPostProcessing,
       buildUpsampling,
-      latencyMode,
     ]
   )
 

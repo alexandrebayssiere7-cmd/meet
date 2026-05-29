@@ -1,22 +1,9 @@
 import { GpuRenderer } from './GpuRenderer'
-import { DynamicLatencyEngine, STATIC_MODE_TABLE } from '../stats/DynamicLatencyEngine'
-import { MaskMotionTracker } from '../preprocessing/MaskMotionTracker'
 import { VideoFrameTracker } from '../preprocessing/VideoFrameTracker'
 import { FrameMaskPair } from '../segmenters/SegmenterLoopRunner'
-import { LatencyMode, MaskBlendMode } from '..'
-import {
-  pushGapSample,
-  pushLatencySample,
-  tickCameraFrame,
-  tickRenderFrame,
-  setEffectiveLatencyMode,
-  setMotionScore,
-  setMaskOffset,
-} from '../stats/MattingStatsStore'
 
 export class RenderLoopRunner {
   private videoElement?: HTMLVideoElement
-  private outputCanvas?: HTMLCanvasElement
   private _renderLoopActive = false
   private _renderLoopHandle: number | null = null
   private _lastRenderedSeq = -1
@@ -24,18 +11,14 @@ export class RenderLoopRunner {
 
   constructor(
     private getGpuRenderer: () => GpuRenderer | undefined,
-    private getLatencyEngine: () => DynamicLatencyEngine,
-    private getMotionTracker: () => MaskMotionTracker,
     private getFrameTracker: () => VideoFrameTracker,
     private getLatestPair: () => FrameMaskPair | null,
     private getPassthroughMask: (w: number, h: number) => Float32Array,
-    private getLatencyParams: () => { latencyMode: LatencyMode },
     private getProcessingDimensions: () => { w: number; h: number }
   ) {}
 
-  start(videoElement: HTMLVideoElement, outputCanvas: HTMLCanvasElement) {
+  start(videoElement: HTMLVideoElement) {
     this.videoElement = videoElement
-    this.outputCanvas = outputCanvas
     this._renderLoopActive = true
     this._lastRenderedSeq = -1
     this._lastVideoTime = -1
@@ -46,7 +29,6 @@ export class RenderLoopRunner {
     this._renderLoopActive = false
     this._cancelRender()
     this.videoElement = undefined
-    this.outputCanvas = undefined
   }
 
   private _scheduleRender(): void {
@@ -66,7 +48,6 @@ export class RenderLoopRunner {
           const t = this.videoElement.currentTime
           if (t !== this._lastVideoTime) {
             this._lastVideoTime = t
-            tickCameraFrame()
             this._renderFrame()
           }
         }
@@ -94,73 +75,18 @@ export class RenderLoopRunner {
       if (vw !== gpuRenderer.outW || vh !== gpuRenderer.outH) {
         gpuRenderer.resizeOutput(vw, vh)
       }
-      gpuRenderer.setMaskOffset(0, 0)
-      gpuRenderer.setBlendMix(0)
-      setEffectiveLatencyMode(null)
-      setMotionScore(0)
-      setMaskOffset(0, 0)
       this._drawPassthrough()
       return
     }
 
     gpuRenderer.uploadMask(pair.mask, pair.procW, pair.procH)
 
-    const motionTracker = this.getMotionTracker()
-    const motionScore = motionTracker.isValid() ? motionTracker.getMotionScore() : 0
-    setMotionScore(motionScore)
-
-    const { latencyMode } = this.getLatencyParams()
-    const latencyEngine = this.getLatencyEngine()
-
-    const entry = STATIC_MODE_TABLE[latencyMode]
-    const effectiveMode: MaskBlendMode = entry.mode
-    const blendT = latencyEngine.computeBlendT(effectiveMode, pair.captureTime)
-    latencyEngine.lastEffectiveMode = effectiveMode
-    setEffectiveLatencyMode(effectiveMode)
-
-    gpuRenderer.setMaskOffset(0, 0)
-    setMaskOffset(0, 0)
-    gpuRenderer.setBlendMix(effectiveMode === 'blend' ? blendT : 0)
-
-    if (effectiveMode === 'frameLock') {
-      const sw = pair.source.width
-      const sh = pair.source.height
-      if (sw !== gpuRenderer.outW || sh !== gpuRenderer.outH) {
-        gpuRenderer.resizeOutput(sw, sh)
-      }
-      gpuRenderer.render(pair.source)
-    } else if (effectiveMode === 'live') {
-      const vw = this.videoElement.videoWidth
-      const vh = this.videoElement.videoHeight
-      if (vw !== gpuRenderer.outW || vh !== gpuRenderer.outH) {
-        gpuRenderer.resizeOutput(vw, vh)
-      }
-      gpuRenderer.render(this.videoElement)
-    } else {
-      const sw = pair.source.width
-      const sh = pair.source.height
-      if (sw !== gpuRenderer.outW || sh !== gpuRenderer.outH) {
-        gpuRenderer.resizeOutput(sw, sh)
-      }
-      gpuRenderer.render(pair.source, this.videoElement)
+    const sw = pair.source.width
+    const sh = pair.source.height
+    if (sw !== gpuRenderer.outW || sh !== gpuRenderer.outH) {
+      gpuRenderer.resizeOutput(sw, sh)
     }
-
-    const now = performance.now()
-    const tracker = this.getFrameTracker()
-    const liveCameraTime = tracker.latestVideoFrameMeta?.captureTime ?? now
-    let appliedCameraTime: number
-    if (effectiveMode === 'live') {
-      appliedCameraTime = liveCameraTime
-    } else if (effectiveMode === 'frameLock') {
-      appliedCameraTime = pair.cameraCaptureTime
-    } else {
-      appliedCameraTime =
-        pair.cameraCaptureTime +
-        (liveCameraTime - pair.cameraCaptureTime) * blendT
-    }
-    pushLatencySample(now - appliedCameraTime)
-    pushGapSample(Math.max(0, appliedCameraTime - pair.cameraCaptureTime))
-    tickRenderFrame()
+    gpuRenderer.render(pair.source)
   }
 
   private _drawPassthrough() {

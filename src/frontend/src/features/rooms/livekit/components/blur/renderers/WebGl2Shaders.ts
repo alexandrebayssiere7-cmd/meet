@@ -135,32 +135,25 @@ in vec2 vUv;
 uniform sampler2D uVideo;     // frame-locked source (matches uMask)
 uniform sampler2D uBg;
 uniform sampler2D uMask;
-uniform sampler2D uLiveVideo; // live <video> source, used when uBlendT > 0
 uniform float uErosionRadius; // pixels at output resolution, 0 = disabled
 uniform vec2 uOutTexel;       // vec2(1/outW, 1/outH)
-uniform vec2 uMaskOffset;     // uv offset applied to every mask sample (prediction)
-uniform float uBlendT;        // 0 = pure uVideo, 1 = pure uLiveVideo, in between = cross-fade
 out vec4 fragColor;
 void main() {
-  vec3 fgLocked = texture(uVideo, vUv).rgb;
-  vec3 fg = uBlendT > 0.0
-    ? mix(fgLocked, texture(uLiveVideo, vUv).rgb, uBlendT)
-    : fgLocked;
+  vec3 fg = texture(uVideo, vUv).rgb;
   vec3 bg = texture(uBg, vUv).rgb;
   // Erosion applied here at output resolution so that uErosionRadius is measured
   // in actual output pixels — not in the coarse processing-resolution pixels that
   // would produce large blocky artefacts after upsampling.
   // Diamond kernel (H + V in one pass): accurate enough for edge trimming.
-  vec2 mUv = vUv - uMaskOffset;
-  float m = texture(uMask, mUv).r;
+  float m = texture(uMask, vUv).r;
   if (uErosionRadius > 0.0) {
     for (int i = 1; i <= 16; i++) {
       if (float(i) > uErosionRadius) break;
       float fi = float(i);
-      m = min(m, texture(uMask, mUv + vec2(uOutTexel.x * fi, 0.0)).r);
-      m = min(m, texture(uMask, mUv - vec2(uOutTexel.x * fi, 0.0)).r);
-      m = min(m, texture(uMask, mUv + vec2(0.0, uOutTexel.y * fi)).r);
-      m = min(m, texture(uMask, mUv - vec2(0.0, uOutTexel.y * fi)).r);
+      m = min(m, texture(uMask, vUv + vec2(uOutTexel.x * fi, 0.0)).r);
+      m = min(m, texture(uMask, vUv - vec2(uOutTexel.x * fi, 0.0)).r);
+      m = min(m, texture(uMask, vUv + vec2(0.0, uOutTexel.y * fi)).r);
+      m = min(m, texture(uMask, vUv - vec2(0.0, uOutTexel.y * fi)).r);
     }
   }
   // +0.035 foreground bias preserves edges that conservative segmentation models clip.

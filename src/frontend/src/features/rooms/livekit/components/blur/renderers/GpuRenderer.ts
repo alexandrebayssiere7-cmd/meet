@@ -25,7 +25,7 @@ export interface GpuRendererInitOpts {
  * All blur passes are GPU shaders.
  */
 export interface GpuRenderer {
-  readonly backend: 'webgpu' | 'webgl2' | 'canvas2d'
+  readonly backend: 'webgl2' | 'canvas2d'
   outW: number
   outH: number
   init(canvas: HTMLCanvasElement, opts: GpuRendererInitOpts): Promise<void>
@@ -37,12 +37,6 @@ export interface GpuRenderer {
   setMode(mode: 'blur' | 'virtual'): void
   setPostProcessing(cfg: PostProcessingConfig): void
   setUpsampling(cfg: UpsamplingConfig): void
-  /** UV-space mask offset applied at composite time (prediction warp). */
-  setMaskOffset(u: number, v: number): void
-  /** Blend ratio between frame-locked source and live source (0..1). */
-  setBlendMix(t: number): void
-  render(source: RenderSource, liveSource?: RenderSource): void
-  /** Read a small RGBA8 patch — used by preflight diagnostics. */
-  readPixels(x: number, y: number, w: number, h: number): Uint8Array
+  render(source: RenderSource): void
   destroy(): void
 }

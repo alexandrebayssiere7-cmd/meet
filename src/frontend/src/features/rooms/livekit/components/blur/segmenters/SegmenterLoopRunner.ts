@@ -3,7 +3,6 @@ import { PreProcessingPipeline } from '../preprocessing/PreProcessingPipeline'
 import { MattingCanvasManager } from '../preprocessing/MattingCanvasManager'
 import { VideoFrameTracker } from '../preprocessing/VideoFrameTracker'
 import { pushMattingError } from '../errors/MattingErrorStore'
-import { pushInferenceSample, tickSegmenterFrame } from '../stats/MattingStatsStore'
 
 export interface FrameMaskPair {
   mask: Float32Array
@@ -18,7 +17,6 @@ export class SegmenterLoopRunner {
   private videoElement?: HTMLVideoElement
   private _segLoopActive = false
   private _lastInferenceSeq = -1
-  private _lastMask?: Float32Array
 
   constructor(
     private getSegmenter: () => Segmenter | undefined,
@@ -34,14 +32,12 @@ export class SegmenterLoopRunner {
     this.videoElement = videoElement
     this._segLoopActive = true
     this._lastInferenceSeq = -1
-    this._lastMask = undefined
     this._runSegmenterLoop() // fire-and-forget
   }
 
   stop() {
     this._segLoopActive = false
     this.videoElement = undefined
-    this._lastMask = undefined
   }
 
   private async _runSegmenterLoop(): Promise<void> {
@@ -105,14 +101,8 @@ export class SegmenterLoopRunner {
           return
         }
 
-        const frameToSegment = prePipeline
-          ? prePipeline.apply(sourceImageData, this._lastMask)
-          : sourceImageData
-
         const inferStart = performance.now()
-        const rawMask = await seg.segment(frameToSegment, inferStart)
-        pushInferenceSample(performance.now() - inferStart)
-        tickSegmenterFrame()
+        const rawMask = await seg.segment(sourceImageData, inferStart)
 
         if (!this._segLoopActive) {
           capturedSource.close()
@@ -128,7 +118,6 @@ export class SegmenterLoopRunner {
                 cropBbox
               )
             : rawMask
-          this._lastMask = mask
 
           this.onPairProduced({
             mask,
@@ -155,11 +144,7 @@ export class SegmenterLoopRunner {
         }
         if (!this._segLoopActive) return
         console.error('[AMP] segmenter loop error', e)
-        pushMattingError({
-          code: 'SEGMENTER_TIMEOUT_PASSTHROUGH',
-          level: 'warn',
-          detail: e instanceof Error ? `${e.name}: ${e.message}` : String(e),
-        })
+        console.warn('[matting:SEGMENTER_TIMEOUT_PASSTHROUGH]', e instanceof Error ? `${e.name}: ${e.message}` : String(e))
         await new Promise<void>((r) => setTimeout(r, 100))
         continue
       }

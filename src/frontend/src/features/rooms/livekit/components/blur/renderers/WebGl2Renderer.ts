@@ -56,7 +56,6 @@ export class WebGl2Renderer implements GpuRenderer {
   private quadBuffer!: WebGLBuffer
 
   // programs
-  private pUploadMask!: WebGLProgram
   private pEma!: WebGLProgram
   private pCopyR!: WebGLProgram
   private pMaskedDownsample!: WebGLProgram
@@ -74,18 +73,6 @@ export class WebGl2Renderer implements GpuRenderer {
 
   // textures
   private videoTex!: WebGLTexture
-  // Live-camera frame, uploaded only when the orchestrator requests a blend
-  // between the frame-locked source (`videoTex`) and the live source. Allocated
-  // lazily on first use to avoid the memory cost when blend mode is never used.
-  private liveVideoTex: WebGLTexture | null = null
-  // Mask warp offset in uv space (uMaskOffset uniform). Applied at the mask
-  // sample-time in the composite shader to align the (possibly stale) mask
-  // with the live frame using a velocity prediction.
-  private maskOffsetU = 0
-  private maskOffsetV = 0
-  // Cross-fade weight between `videoTex` (frame-locked, 0.0) and `liveVideoTex`
-  // (live, 1.0). 0.0 disables the blend pass entirely.
-  private blendMix = 0
   private rawMaskTex!: WebGLTexture // R8 at proc res — uploaded from segmenter
   private maskA!: WebGLTexture // R8 ping
   private maskB!: WebGLTexture // R8 pong
@@ -132,9 +119,6 @@ export class WebGl2Renderer implements GpuRenderer {
       uMask: WebGLUniformLocation | null
       uErosionRadius: WebGLUniformLocation | null
       uOutTexel: WebGLUniformLocation | null
-      uLiveVideo: WebGLUniformLocation | null
-      uBlendT: WebGLUniformLocation | null
-      uMaskOffset: WebGLUniformLocation | null
     }
   }
 
@@ -255,23 +239,9 @@ export class WebGl2Renderer implements GpuRenderer {
     const gl = this.gl
     if (!gl) return
 
-    // 1. Reallocate videoTex (and the optional liveVideoTex) at new size
+    // 1. Reallocate videoTex at new size
     if (this.videoTex) {
       gl.bindTexture(gl.TEXTURE_2D, this.videoTex)
-      gl.texImage2D(
-        gl.TEXTURE_2D,
-        0,
-        gl.RGBA,
-        w,
-        h,
-        0,
-        gl.RGBA,
-        gl.UNSIGNED_BYTE,
-        null
-      )
-    }
-    if (this.liveVideoTex) {
-      gl.bindTexture(gl.TEXTURE_2D, this.liveVideoTex)
       gl.texImage2D(
         gl.TEXTURE_2D,
         0,
@@ -394,20 +364,7 @@ export class WebGl2Renderer implements GpuRenderer {
     this.upsamplingCfg = cfg
   }
 
-  setMaskOffset(u: number, v: number) {
-    this.maskOffsetU = Number.isFinite(u) ? u : 0
-    this.maskOffsetV = Number.isFinite(v) ? v : 0
-  }
-
-  setBlendMix(t: number) {
-    if (!Number.isFinite(t)) {
-      this.blendMix = 0
-      return
-    }
-    this.blendMix = t < 0 ? 0 : t > 1 ? 1 : t
-  }
-
-  render(source: RenderSource, liveSource?: RenderSource) {
+  render(source: RenderSource) {
     if (!source) return
     const isVideo = 'videoWidth' in source
     const sw = isVideo ? (source as HTMLVideoElement).videoWidth : (source as ImageBitmap).width
@@ -440,48 +397,6 @@ export class WebGl2Renderer implements GpuRenderer {
       return
     }
     if (!isVideo) gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true)
-
-    // 1b. Upload optional live source (used by the standard composite shader
-    // when uBlendT > 0). Allocated lazily on first use.
-    const wantsBlend = this.blendMix > 0 && liveSource !== undefined
-    if (wantsBlend) {
-      const liveIsVideo = 'videoWidth' in liveSource!
-      if (!this.liveVideoTex) {
-        this.liveVideoTex = gl.createTexture()
-        gl.bindTexture(gl.TEXTURE_2D, this.liveVideoTex)
-        gl.texImage2D(
-          gl.TEXTURE_2D,
-          0,
-          gl.RGBA,
-          this.outW,
-          this.outH,
-          0,
-          gl.RGBA,
-          gl.UNSIGNED_BYTE,
-          null
-        )
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
-      }
-      gl.activeTexture(gl.TEXTURE3)
-      gl.bindTexture(gl.TEXTURE_2D, this.liveVideoTex)
-      if (!liveIsVideo) gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false)
-      try {
-        gl.texImage2D(
-          gl.TEXTURE_2D,
-          0,
-          gl.RGBA,
-          gl.RGBA,
-          gl.UNSIGNED_BYTE,
-          liveSource!
-        )
-      } catch (e) {
-        void e
-      }
-      if (!liveIsVideo) gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true)
-    }
 
     // 2. Run post-processing chain on the mask at processing resolution.
     const procMaskTex = this.maskPostProcessor.run(this.postCfg, this.procW, this.procH)
@@ -528,24 +443,6 @@ export class WebGl2Renderer implements GpuRenderer {
     gl.activeTexture(gl.TEXTURE2)
     gl.bindTexture(gl.TEXTURE_2D, finalMaskTex)
     gl.uniform1i(this.uLoc.composite.uMask, 2)
-    // uLiveVideo defaults to the frame-locked source when blend is off, so the
-    // shader's mix() degenerates to a no-op. When blend is on, bind the live
-    // source we uploaded above.
-    gl.activeTexture(gl.TEXTURE3)
-    gl.bindTexture(
-      gl.TEXTURE_2D,
-      wantsBlend && this.liveVideoTex ? this.liveVideoTex : this.videoTex
-    )
-    gl.uniform1i(this.uLoc.composite.uLiveVideo, 3)
-    gl.uniform1f(
-      this.uLoc.composite.uBlendT,
-      wantsBlend ? this.blendMix : 0
-    )
-    gl.uniform2f(
-      this.uLoc.composite.uMaskOffset,
-      this.maskOffsetU,
-      this.maskOffsetV
-    )
     gl.uniform1f(
       this.uLoc.composite.uErosionRadius,
       this.postCfg.erosion?.pixels ?? 0
@@ -554,14 +451,6 @@ export class WebGl2Renderer implements GpuRenderer {
     this._drawQuad()
 
     gl.flush()
-  }
-
-  readPixels(x: number, y: number, w: number, h: number): Uint8Array {
-    const out = new Uint8Array(w * h * 4)
-    const gl = this.gl
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
-    gl.readPixels(x, y, w, h, gl.RGBA, gl.UNSIGNED_BYTE, out)
-    return out
   }
 
   private _upsampleMask(procMaskTex: WebGLTexture): WebGLTexture {
@@ -590,7 +479,6 @@ export class WebGl2Renderer implements GpuRenderer {
     const gl = this.gl
     const tex = [
       this.videoTex,
-      this.liveVideoTex,
       this.rawMaskTex,
       this.maskA,
       this.maskB,
@@ -614,7 +502,6 @@ export class WebGl2Renderer implements GpuRenderer {
     if (this.quadBuffer) gl.deleteBuffer(this.quadBuffer)
     if (this.vao) gl.deleteVertexArray(this.vao)
     const programs = [
-      this.pUploadMask,
       this.pEma,
       this.pCopyR,
       this.pMaskedDownsample,
@@ -718,20 +605,6 @@ export class WebGl2Renderer implements GpuRenderer {
     return this.bgBlurPongTex
   }
 
-  /**
-   * Segmo-style compositor for virtual backgrounds.
-   *
-   * Runs the foreground-recovery composite shader: edge-adaptive sharpening from
-   * the camera gradient, closed-form alpha matting on a 13-tap cross pattern in
-   * the transition zone, chroma-aware color-separation gate, and the VFX
-   * decontamination equation `output = I + (B_new − B_old) * (1 − α)` to remove
-   * the old background's color contribution from contaminated edge pixels.
-   *
-   * Intentionally does NOT include the erosion step from the standard compositor:
-   * segmo's transition-zone matting subsumes that need. The user-selectable
-   * postprocess chain (morphology/EMA/guided-upsample) ran upstream and
-   * is unaffected.
-   */
   private _drawQuad() {
     const gl = this.gl
     gl.bindVertexArray(this.vao)
@@ -893,7 +766,6 @@ export class WebGl2Renderer implements GpuRenderer {
   }
 
   private _buildPrograms() {
-    this.pUploadMask = this._link(VS, FS_COPY_R)
     this.pEma = this._link(VS, FS_EMA)
     this.pCopyR = this._link(VS, FS_COPY_R)
     this.pMaskedDownsample = this._link(VS, FS_MASKED_DOWNSAMPLE)
@@ -928,9 +800,6 @@ export class WebGl2Renderer implements GpuRenderer {
         uMask: loc(this.pComposite, 'uMask'),
         uErosionRadius: loc(this.pComposite, 'uErosionRadius'),
         uOutTexel: loc(this.pComposite, 'uOutTexel'),
-        uLiveVideo: loc(this.pComposite, 'uLiveVideo'),
-        uBlendT: loc(this.pComposite, 'uBlendT'),
-        uMaskOffset: loc(this.pComposite, 'uMaskOffset'),
       },
     }
   }

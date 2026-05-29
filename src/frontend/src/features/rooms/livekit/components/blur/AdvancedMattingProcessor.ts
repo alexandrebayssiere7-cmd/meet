@@ -1,7 +1,6 @@
 import { ProcessorOptions, Track } from 'livekit-client'
 import {
   BackgroundProcessorInterface,
-  LatencyMode,
   ProcessorConfig,
   ProcessorType,
   SegmentationModel,
@@ -10,8 +9,6 @@ import {
   PreProcessingConfig,
 } from '.'
 import { PreProcessingPipeline } from './preprocessing/PreProcessingPipeline'
-import { MaskMotionTracker } from './preprocessing/MaskMotionTracker'
-import { BBox } from './preprocessing/RoiCropper'
 import {
   Segmenter,
   createSegmenter,
@@ -24,17 +21,9 @@ import {
   dismissMattingError,
 } from './errors/MattingErrorStore'
 import { debugWarn } from './debug'
-import {
-  resetMattingStats,
-  setCameraSettings,
-  setMattingStatsActive,
-  setMattingStatsModel,
-  setSegmenterFrameSkip,
-} from './stats/MattingStatsStore'
 
 import { MattingCanvasManager } from './preprocessing/MattingCanvasManager'
 import { SegmenterBenchmarker } from './segmenters/SegmenterBenchmarker'
-import { DynamicLatencyEngine } from './stats/DynamicLatencyEngine'
 import { VideoFrameTracker } from './preprocessing/VideoFrameTracker'
 import { SegmenterLoopRunner, FrameMaskPair } from './segmenters/SegmenterLoopRunner'
 import { RenderLoopRunner } from './renderers/RenderLoopRunner'
@@ -61,7 +50,6 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
 
   // Refactored helpers & architectural sub-modules
   private _canvasManager = new MattingCanvasManager()
-  private _latencyEngine = new DynamicLatencyEngine()
   private _frameTracker = new VideoFrameTracker()
   private _segmenterRunner!: SegmenterLoopRunner
   private _renderRunner!: RenderLoopRunner
@@ -72,10 +60,6 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
   // Shared two-loop states
   private _latestPair: FrameMaskPair | null = null
   private _segmenterFrameSkip = 2
-
-  private _latencyMode: LatencyMode = 0
-
-  private _motionTracker = new MaskMotionTracker()
 
   virtualBackgroundImage?: HTMLImageElement
 
@@ -92,9 +76,6 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     this.name = opts.type === ProcessorType.VIRTUAL ? 'virtual' : 'blur'
     this.options = opts
     this.type = opts.type
-    const cfg = DynamicLatencyEngine.getLatencyConfig(opts)
-    this._latencyMode = cfg.mode
-
     this._initRunners()
   }
 
@@ -111,31 +92,11 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
 
     this._renderRunner = new RenderLoopRunner(
       () => this.gpuRenderer,
-      () => this._latencyEngine,
-      () => this._motionTracker,
       () => this._frameTracker,
       () => this._latestPair,
       (w, h) => this._canvasManager.getPassthroughMask(w, h),
-      () => this.getLatencyParams(),
       () => ({ w: this.processingWidth, h: this.processingHeight })
     )
-  }
-
-  // Getters for external and testing compatibility
-  get segmentationMaskCanvas() {
-    return this._canvasManager.segmentationMaskCanvas
-  }
-
-  get segmentationMaskCanvasCtx() {
-    return this._canvasManager.segmentationMaskCanvasCtx
-  }
-
-  get sourceImageData() {
-    return undefined
-  }
-
-  getLatencyParams() {
-    return { latencyMode: this._latencyMode }
   }
 
   private _onPairProduced(pair: FrameMaskPair) {
@@ -162,7 +123,6 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     this.source = opts.track as MediaStreamTrack
     this.sourceSettings = this.source!.getSettings()
     this.videoElement = opts.element as HTMLVideoElement
-    this._publishCameraSettings()
     const video = this.videoElement
 
     try {
@@ -204,13 +164,14 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
 
       if (this._destroyed) return
 
+      const { post, up } = this._getEffectsConfig()
       const rendererOpts: GpuRendererInitOpts = {
         outW: realW,
         outH: realH,
         processingW: this.processingWidth,
         processingH: this.processingHeight,
-        postProcessing: this._getPostProcessingConfig(),
-        upsampling: this._getUpsamplingConfig(),
+        postProcessing: post,
+        upsampling: up,
       }
       this.gpuRenderer = await this._initRendererWithFallback(rendererOpts)
       this._applyRendererConfig()
@@ -218,7 +179,13 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       if (this._destroyed) return
 
       if (!this.outputCanvas!.captureStream) {
-        throw new Error('captureStream not supported on this browser')
+        pushMattingError({
+          code: 'CAPTURESTREAM_UNSUPPORTED',
+          level: 'error',
+          detail: 'captureStream API is not supported on this browser',
+        })
+        this.processedTrack = this.source
+        return
       }
       const stream = this.outputCanvas!.captureStream(30)
       const tracks = stream.getVideoTracks()
@@ -235,7 +202,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       this._startLoops()
 
       this._configuredModel = this._getModel(this.options)
-      this._initSegmenterBackground(this._configuredModel)
+      this._loadSegmenter(this._configuredModel, true)
     } catch (e) {
       debugWarn('[AMP INIT] Initialization failed, falling back to passthrough track.', e)
       pushMattingError({
@@ -262,8 +229,6 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     this.options = opts
     this.type = opts.type
     this.name = opts.type === ProcessorType.VIRTUAL ? 'virtual' : 'blur'
-    const cfg = DynamicLatencyEngine.getLatencyConfig(opts)
-    this._latencyMode = cfg.mode
 
     if (!this.gpuRenderer) {
       return
@@ -276,11 +241,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     this._initVirtualBackgroundImage()
 
     if (newModel !== prevConfigured) {
-      if (this.segmenter) {
-        this._switchSegmenterBackground(newModel)
-      } else {
-        this._initSegmenterBackground(newModel)
-      }
+      this._loadSegmenter(newModel, !this.segmenter)
     }
     this._applyRendererConfig()
   }
@@ -306,34 +267,22 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     })
   }
 
-  private _getPostProcessingConfig(): PostProcessingConfig {
+  private _getEffectsConfig(): {
+    post: PostProcessingConfig
+    up: UpsamplingConfig
+    pre: PreProcessingConfig | undefined
+  } {
     if (
       this.options.type === ProcessorType.BLUR ||
       this.options.type === ProcessorType.VIRTUAL
     ) {
-      return this.options.postProcessing ?? {}
+      return {
+        post: this.options.postProcessing ?? {},
+        up: this.options.upsampling ?? {},
+        pre: this.options.preProcessing,
+      }
     }
-    return {}
-  }
-
-  private _getUpsamplingConfig(): UpsamplingConfig {
-    if (
-      this.options.type === ProcessorType.BLUR ||
-      this.options.type === ProcessorType.VIRTUAL
-    ) {
-      return this.options.upsampling ?? {}
-    }
-    return {}
-  }
-
-  private _getPreProcessingConfig(): PreProcessingConfig | undefined {
-    if (
-      this.options.type === ProcessorType.BLUR ||
-      this.options.type === ProcessorType.VIRTUAL
-    ) {
-      return this.options.preProcessing
-    }
-    return undefined
+    return { post: {}, up: {}, pre: undefined }
   }
 
   private async _initRendererWithFallback(
@@ -364,17 +313,17 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     if (this.options.type === ProcessorType.BLUR) {
       this.gpuRenderer.setBlurRadius(this.options.blurRadius ?? DEFAULT_BLUR)
     }
-    this.gpuRenderer.setPostProcessing(this._getPostProcessingConfig())
-    this.gpuRenderer.setUpsampling(this._getUpsamplingConfig())
+    const { post, up, pre } = this._getEffectsConfig()
+    this.gpuRenderer.setPostProcessing(post)
+    this.gpuRenderer.setUpsampling(up)
     this.gpuRenderer.setVirtualBackground(
       this.options.type === ProcessorType.VIRTUAL
         ? (this.virtualBackgroundImage ?? null)
         : null
     )
 
-    const preCfg = this._getPreProcessingConfig()
-    this._preProcessingPipeline = preCfg?.roiCropping?.enabled
-      ? new PreProcessingPipeline(preCfg)
+    this._preProcessingPipeline = pre?.roiCropping?.enabled
+      ? new PreProcessingPipeline(pre)
       : undefined
   }
 
@@ -437,37 +386,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     return { seg, targetModel }
   }
 
-  private async _initSegmenterBackground(model: SegmentationModel) {
-    if (this._destroyed) return
-    this._pendingModel = model
-    try {
-      const result = await this._createAndCalibrateSegmenter(model)
-      if (!result || this._destroyed || this._pendingModel !== model) {
-        return
-      }
-
-      this.segmenter = result.seg
-      this.currentModel = result.targetModel
-      setMattingStatsModel(model, result.targetModel)
-      setSegmenterFrameSkip(this._segmenterFrameSkip)
-      this.processingWidth = result.seg.inputSize.width
-      this.processingHeight = result.seg.inputSize.height
-      this._resizeMaskIfNeeded()
-      this._resolveReady()
-    } catch (e) {
-      if (!this._destroyed && this._pendingModel === model) {
-        console.error(
-          '[AMP] segmenter init failed — running in passthrough mode',
-          e
-        )
-        this.segmenter = undefined
-        setMattingStatsModel(model, null)
-        this._resolveReady()
-      }
-    }
-  }
-
-  private async _switchSegmenterBackground(model: SegmentationModel) {
+  private async _loadSegmenter(model: SegmentationModel, firstInit: boolean) {
     if (this._destroyed) return
     this._pendingModel = model
     try {
@@ -478,9 +397,11 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
 
       const old = this.segmenter
       this.segmenter = result.seg
+      if (this._destroyed) {
+        result.seg.destroy()
+        return
+      }
       this.currentModel = result.targetModel
-      setMattingStatsModel(model, result.targetModel)
-      setSegmenterFrameSkip(this._segmenterFrameSkip)
       this.processingWidth = result.seg.inputSize.width
       this.processingHeight = result.seg.inputSize.height
       old?.destroy()
@@ -488,7 +409,15 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
       this._resolveReady()
     } catch (e) {
       if (!this._destroyed && this._pendingModel === model) {
-        console.error('[AMP] segmenter switch failed', e)
+        console.error(
+          firstInit
+            ? '[AMP] segmenter init failed — running in passthrough mode'
+            : '[AMP] segmenter switch failed',
+          e
+        )
+        if (firstInit) {
+          this.segmenter = undefined
+        }
         this._resolveReady()
       }
     }
@@ -550,26 +479,9 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
   private _launch(): void {
     if (this._destroyed) return
     this.videoElementLoaded = true
-    setMattingStatsActive(true)
     this._frameTracker.start(this.videoElement!)
     this._segmenterRunner.start(this.videoElement!)
-    this._renderRunner.start(this.videoElement!, this.outputCanvas!)
-  }
-
-  private _publishCameraSettings(): void {
-    const s = this.sourceSettings
-    const track = this.source as MediaStreamTrack & {
-      getCapabilities?: () => MediaTrackCapabilities
-    }
-    const cap = track.getCapabilities?.()
-    setCameraSettings({
-      frameRateRequested: typeof s?.frameRate === 'number' ? s.frameRate : null,
-      frameRateActual: typeof s?.frameRate === 'number' ? s.frameRate : null,
-      frameRateMax:
-        typeof cap?.frameRate?.max === 'number' ? cap.frameRate.max : null,
-      width: typeof s?.width === 'number' ? s.width : null,
-      height: typeof s?.height === 'number' ? s.height : null,
-    })
+    this._renderRunner.start(this.videoElement!)
   }
 
   private _createMainCanvasWithSize(w: number, h: number) {
@@ -595,14 +507,11 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
     this._pendingModel = undefined
     this._configuredModel = undefined
     this.videoElementLoaded = false
-    this._motionTracker.reset()
-    this._latencyEngine.reset()
 
     this._segmenterRunner.stop()
     this._renderRunner.stop()
     this._frameTracker.stop()
 
-    resetMattingStats()
     if (this.videoElement) {
       this.videoElement.onloadeddata = null
     }
