@@ -1,3 +1,17 @@
+/**
+ * Region-of-Interest (ROI) cropper with dead-zone stabilization.
+ *
+ * Called by: PreProcessingPipeline (wraps RoiCropper in its thin facade).
+ *
+ * Pipeline role: Optional pre-inference step that narrows the segmenter input
+ * to a stabilized bounding box around the person. Per-frame call order:
+ *   1. getNextCropBbox()  — returns the bbox used to crop the video snapshot
+ *   2. model.segment()   — runs on the cropped ImageData
+ *   3. remapMask()        — maps the crop-space mask back to full-frame space
+ *   4. updateWithMask()   — updates the stable bbox for the next frame
+ * Motion outside the current bbox triggers a full-frame reset so sudden
+ * scene changes don't trap the crop on the wrong region.
+ */
 const DEAD_ZONE_POSITION = 0.03
 const DEAD_ZONE_SIZE = 0.015
 const BBOX_PADDING = 0.08

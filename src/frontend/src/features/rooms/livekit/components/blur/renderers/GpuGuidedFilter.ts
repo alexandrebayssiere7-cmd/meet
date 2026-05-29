@@ -1,5 +1,15 @@
 /**
- * GPU implementation of the FAST guided filter (He & Sun, 2015) for mask upsampling.
+ * GPU implementation of the fast guided filter (He & Sun, 2015) for mask
+ * upsampling from processing resolution to full output resolution.
+ *
+ * Called by: WebGl2Renderer._upsampleMask() — lazily instantiated on the
+ * first render call after init.
+ *
+ * Pipeline role: Sits between MaskPostProcessor and the final composite
+ * shader. Upsamples the low-resolution mask (procW×procH) to full output
+ * resolution (outW×outH) using the RGB video frame as a guide image so
+ * fine-detail edges (hair, shoulders) are preserved rather than bilinearly
+ * blurred.
  *
  * Upsamples a low-resolution mask (procW×procH) to full output resolution
  * (outW×outH) using the RGB video frame as guide.

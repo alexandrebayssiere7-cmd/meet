@@ -1,8 +1,20 @@
 /**
  * GLSL shader source constants for the WebGL2 matting compositor.
  *
- * Extracted verbatim from WebGl2Renderer._buildPrograms() — no value has been
- * changed. Each constant is a complete shader program source string.
+ * Called by: WebGl2Renderer._buildPrograms() — every shader in this file is
+ * compiled once at renderer initialisation.
+ *
+ * Pipeline role: Static data module; supplies the complete GLSL source for
+ * every GPU pass in the WebGL2 path:
+ *   VS                    shared full-screen triangle vertex shader
+ *   FS_COPY_R             blit a single-channel texture
+ *   FS_EMA                temporal exponential moving average on the mask
+ *   FS_MORPHOLOGY         GPU morphology (positive radius = dilation, negative = erosion)
+ *   FS_MASKED_DOWNSAMPLE  background-only 3×3 weighted downsample to half-res
+ *   FS_MASK_WEIGHTED_BLUR mask-weighted separable Gaussian blur
+ *   FS_COMPOSITE          standard blur / virtual background composite
+ *   FS_COMPOSITE_SEGMO, FS_SEGMO_EDGE_FEATHER, FS_LIGHT_WRAP,
+ *   FS_MASKED_FG, FS_FG_COLOR_CAST  — segmo virtual-background pass shaders
  */
 
 // ─────────────────────── Vertex shader (shared by all passes) ───────────────

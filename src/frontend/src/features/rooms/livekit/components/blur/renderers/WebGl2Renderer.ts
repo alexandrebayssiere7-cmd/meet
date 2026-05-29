@@ -1,3 +1,17 @@
+/**
+ * Primary WebGL2 compositor for the background matting pipeline.
+ *
+ * Called by: AdvancedMattingProcessor._initRendererWithFallback() — tried
+ * first; Canvas2dRenderer is used only if this throws during init.
+ *
+ * Pipeline role: Implements the full GPU render path per frame:
+ *   uploadMask()  → raw mask uploaded to rawMaskTex
+ *   render()      → MaskPostProcessor (morphology + EMA)
+ *                 → GpuGuidedFilter upsampling to output resolution
+ *                 → background build (blur path or virtual image)
+ *                 → SegmoCompositor (virtual path) or standard composite shader
+ * All blur passes are GLSL shaders — ctx.filter is never used on this path.
+ */
 import { PostProcessingConfig, UpsamplingConfig } from '..'
 import { pushMattingError } from '../errors/MattingErrorStore'
 import { GpuRenderer, GpuRendererInitOpts, RenderSource } from './GpuRenderer'

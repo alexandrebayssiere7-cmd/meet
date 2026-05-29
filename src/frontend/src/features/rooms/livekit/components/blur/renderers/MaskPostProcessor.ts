@@ -1,3 +1,17 @@
+/**
+ * GPU mask post-processing chain (morphological opening/closing + temporal EMA).
+ *
+ * Called by: WebGl2Renderer.render() on every frame, using programs and
+ * textures owned by WebGl2Renderer.
+ *
+ * Pipeline role: Refines the raw low-resolution segmenter mask before it is
+ * upsampled and composited. Runs entirely at processing resolution (procW×procH)
+ * using ping-pong framebuffers. The chain order is:
+ *   Opening  (erosion → dilation)  — removes stray foreground specks at edges
+ *   Closing  (dilation → erosion)  — fills small holes inside the mask
+ *   EMA      (temporal blend)      — smooths flicker between frames
+ * Returns the WebGLTexture containing the refined mask.
+ */
 import { PostProcessingConfig } from '..'
 
 /**

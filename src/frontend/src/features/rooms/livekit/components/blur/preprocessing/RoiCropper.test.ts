@@ -1,3 +1,12 @@
+/**
+ * Unit tests for RoiCropper's pure functions: computePersonBbox and
+ * stabilizeBbox.
+ *
+ * Called by: Vitest test runner only — not part of the runtime pipeline.
+ *
+ * Pipeline role: Verifies the ROI bounding box math in isolation, covering
+ * threshold behaviour, padding, clamping, and dead-zone stabilization.
+ */
 import { describe, it, expect } from 'vitest'
 import { computePersonBbox, stabilizeBbox, BBox } from './RoiCropper'
 

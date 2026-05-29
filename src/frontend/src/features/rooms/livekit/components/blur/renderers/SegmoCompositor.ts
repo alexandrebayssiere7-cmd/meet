@@ -1,4 +1,19 @@
 /**
+ * Segmo-style virtual background compositor for the WebGL2 render path.
+ *
+ * Called by: WebGl2Renderer.render() — only when mode === 'virtual' and a
+ * virtual background image has been successfully uploaded.
+ *
+ * Pipeline role: Replaces the standard composite shader for virtual backgrounds.
+ * Runs up to three GPU passes:
+ *   Pass A: edge-only feather — widens the transition band near silhouettes
+ *   Pass B: segmo composite  — foreground recovery + closed-form alpha matting
+ *   Pass C: light wrap       — background color spill onto foreground edges
+ * Optionally prepends a foreground color-cast correction (passes T1+T2) to
+ * remove old-background color contamination from edge pixels.
+ */
+
+/**
  * Uniform locations for the Segmo compositing shaders.
  * Resolved once by WebGl2Renderer._buildPrograms() and passed in at construction.
  */

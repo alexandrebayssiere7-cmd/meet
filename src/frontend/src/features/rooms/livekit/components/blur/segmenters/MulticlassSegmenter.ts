@@ -1,3 +1,15 @@
+/**
+ * MediaPipe 6-class Selfie Segmenter (256×256).
+ *
+ * Called by: segmenters/index.ts createSegmenter() — used by default in AUTO
+ * mode and when SegmentationModel.MULTICLASS is set explicitly.
+ *
+ * Pipeline role: Higher-quality segmenter that classifies each pixel into six
+ * categories (background, hair, body-skin, face-skin, clothes, others).
+ * segment() converts the result to a single-channel person probability
+ * (1 − background_confidence). Selected only when the startup benchmark
+ * measures p75 latency ≤ 50 ms.
+ */
 import { ImageSegmenter, ImageSegmenterResult } from '@mediapipe/tasks-vision'
 import {
   Segmenter,

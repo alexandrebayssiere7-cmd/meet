@@ -1,3 +1,15 @@
+/**
+ * Backend-agnostic GPU renderer interface for the background compositor.
+ *
+ * Called by: AdvancedMattingProcessor (owns the instance), RenderLoopRunner
+ * (calls uploadMask and render each frame), WebGl2Renderer and Canvas2dRenderer
+ * (implement it).
+ *
+ * Pipeline role: Defines the compositor contract so AdvancedMattingProcessor
+ * and RenderLoopRunner are decoupled from the WebGL2 vs Canvas2D choice.
+ * Implementations receive the segmenter mask via uploadMask() and write the
+ * composited output frame to the output canvas via render().
+ */
 import { PostProcessingConfig, UpsamplingConfig } from '..'
 
 /**
