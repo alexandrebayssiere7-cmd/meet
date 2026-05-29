@@ -100,58 +100,6 @@ function deriveIdFromProcessorConfig(config: ProcessorConfig) {
   throw new Error(`Unknown config type in config: ${config}`)
 }
 
-type SliderRowProps = {
-  label: string
-  displayValue: string
-  value: number
-  min: number
-  max: number
-  step: number
-  disabled?: boolean
-  onChange: (v: number) => void
-}
-
-const SliderRow = ({
-  label,
-  displayValue,
-  value,
-  min,
-  max,
-  step,
-  disabled,
-  onChange,
-}: SliderRowProps) => (
-  <label
-    className={css({
-      display: 'flex',
-      flexDirection: 'column',
-      gap: '0.15rem',
-      fontSize: 'sm',
-      paddingLeft: '1.4rem',
-      marginTop: '0.15rem',
-    })}
-    style={{ opacity: disabled ? 0.5 : 1 }}
-  >
-    <span>
-      {label} : <strong>{displayValue}</strong>
-    </span>
-    <input
-      type="range"
-      min={min}
-      max={max}
-      step={step}
-      value={value}
-      disabled={disabled}
-      onChange={(e) => onChange(Number(e.target.value))}
-      className={css({
-        width: '100%',
-        cursor: 'pointer',
-        _disabled: { cursor: 'not-allowed' },
-      })}
-    />
-  </label>
-)
-
 // We use a valtio store so that the state is persisted between the join room
 // and the actual room
 const uploadNotPossibleLocalState = proxy({
@@ -199,14 +147,6 @@ export const EffectsConfiguration = ({
   const openingRadius = 3
   const closingEnabled = true
   const closingRadius = 3
-  // Continuous blur radius slider; only meaningful when a blur effect is selected.
-  const initialBlurRadius =
-    processorConfig?.type === ProcessorType.BLUR
-      ? processorConfig.blurRadius
-      : 10
-  const [blurRadiusValue, setBlurRadiusValue] =
-    useState<number>(initialBlurRadius)
-
   const buildPreProcessing = useCallback((): PreProcessingConfig => {
     const cfg: PreProcessingConfig = {}
     if (roiCroppingEnabled) cfg.roiCropping = { enabled: true }
@@ -405,40 +345,6 @@ export const EffectsConfiguration = ({
       withAdvanced,
     ]
   )
-
-  // Live blur radius slider: debounced apply that doesn't go through toggleEffect
-  // (which would stop the processor when slider sits on the same value as selected).
-  const blurDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const applyBlurRadius = useCallback(
-    (radius: number) => {
-      setBlurRadiusValue(radius)
-      if (blurDebounceRef.current) clearTimeout(blurDebounceRef.current)
-      blurDebounceRef.current = setTimeout(async () => {
-        const config = withAdvanced({
-          type: ProcessorType.BLUR,
-          blurRadius: radius,
-        })
-        const processor = videoTrack?.getProcessor() as
-          | BackgroundProcessorInterface
-          | undefined
-        if (processor && processor.options.type === ProcessorType.BLUR) {
-          await processor.update(config)
-          saveProcessorConfig(config)
-        } else {
-          toggleEffect(config)
-        }
-      }, 200)
-    },
-    [videoTrack, withAdvanced, saveProcessorConfig, toggleEffect]
-  )
-
-  // Keep the slider in sync when the user picks a preset button (Light/Strong)
-  // or when blur is disabled.
-  useEffect(() => {
-    if (processorConfig?.type === ProcessorType.BLUR) {
-      setBlurRadiusValue(processorConfig.blurRadius)
-    }
-  }, [processorConfig])
 
   const { data: appConfig } = useConfig()
   const { isLoggedIn } = useUser()
@@ -851,18 +757,6 @@ export const EffectsConfiguration = ({
                       <Icon />
                     </ToggleButton>
                   ))}
-                </div>
-                <div className={css({ marginTop: '0.6rem' })}>
-                  <SliderRow
-                    label={t('blur.radius')}
-                    displayValue={`${blurRadiusValue} px`}
-                    value={blurRadiusValue}
-                    min={1}
-                    max={50}
-                    step={1}
-                    disabled={processorOptions.isDisabled}
-                    onChange={applyBlurRadius}
-                  />
                 </div>
               </div>
 

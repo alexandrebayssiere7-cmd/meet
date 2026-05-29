@@ -256,7 +256,6 @@
     "clear": "Effect uitschakelen",
     "blur": {
       "title": "Achtergrondvervaging",
-      "radius": "Vervaging-intensiteit",
       "status": {
         "none": "Achtergrond scherp.",
         "light": "Achtergrond licht vervaagd.",

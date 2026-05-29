@@ -256,7 +256,6 @@
     "clear": "Effekt deaktivieren",
     "blur": {
       "title": "Hintergrundunschärfe",
-      "radius": "Unschärfe-Intensität",
       "status": {
         "none": "Hintergrund scharf.",
         "light": "Hintergrund leicht verschwommen.",

@@ -256,7 +256,6 @@
     "clear": "Désactiver l'effet",
     "blur": {
       "title": "Flou d'arrière-plan",
-      "radius": "Intensité du flou",
       "status": {
         "none": "Arrière-plan net.",
         "light": "Arrière-plan légèrement flouté.",

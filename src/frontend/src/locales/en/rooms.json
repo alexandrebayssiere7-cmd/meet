@@ -256,7 +256,6 @@
     "clear": "Disable effect",
     "blur": {
       "title": "Background blur",
-      "radius": "Blur intensity",
       "status": {
         "none": "Background clear.",
         "light": "Background slightly blurred.",
