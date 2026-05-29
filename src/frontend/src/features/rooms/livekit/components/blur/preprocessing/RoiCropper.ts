@@ -1,7 +1,6 @@
 const DEAD_ZONE_POSITION = 0.03
 const DEAD_ZONE_SIZE = 0.015
-const SMOOTHING = 0.5
-const BBOX_PADDING = 0.05
+const BBOX_PADDING = 0.08
 const MASK_THRESHOLD = 0.5
 const MOTION_DIFF_THRESHOLD = 25
 const MOTION_PIXEL_RATIO = 1 / 16
@@ -75,13 +74,11 @@ export function stabilizeBbox(current: BBox, next: BBox): BBox {
 
   if (!positionMoved && !sizeMoved) return current
 
-  const s = SMOOTHING
-  const inv = 1 - s
   return {
-    x: inv * current.x + s * next.x,
-    y: inv * current.y + s * next.y,
-    width: inv * current.width + s * next.width,
-    height: inv * current.height + s * next.height,
+    x: next.x,
+    y: next.y,
+    width: next.width,
+    height: next.height,
   }
 }
 
@@ -196,7 +193,8 @@ export class RoiCropper {
       }
     }
 
-    return changedPixels / (w * h) > MOTION_PIXEL_RATIO
+    const outsidePixels = w * h - (bboxX1 - bboxX0) * (bboxY1 - bboxY0)
+    return outsidePixels > 0 && changedPixels / outsidePixels > MOTION_PIXEL_RATIO
   }
 
   private _updatePrevLuma(
