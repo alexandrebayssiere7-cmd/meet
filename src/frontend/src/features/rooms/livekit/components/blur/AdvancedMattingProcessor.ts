@@ -142,9 +142,16 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
   // segmo composite then operates on the unchanged frame/mask textures.
   private _applyFraming(gpuRenderer: GpuRenderer, aspect: number, now: number) {
     let framingEnabled = false
-    // User-facing sliders, both in [0, 1], default 0.5 = current behaviour.
-    // Exponential mapping (× 0.2 to × 5 around the default) so each unit of
-    // slider travel produces a roughly equal perceptual change.
+    // User-facing sliders, both in [0, 1], default 0.5. Exponential mappings
+    // so equal slider travel produces equal perceptual change.
+    //
+    // Sensitivity bounds: 20 % (= 0.20) at the most tolerant end down to
+    // 1.5 % (= 0.015) at the most reactive end. Going below 1.5 % would be
+    // wasted — the raw bbox is already pre-stabilised by RoiCropper and
+    // real subject movements move it by ~3 % at minimum.
+    //
+    // Speed bounds: 2500 ms (cinematic) down to 100 ms (near-snap) around
+    // a 500 ms default at slider=0.5.
     let sensitivity = 0.5
     let speed = 0.5
     if (this.options.type === ProcessorType.VIRTUAL) {
@@ -156,9 +163,7 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
         speed = this.options.framingSpeed
       }
     }
-    const targetDeadZone =
-      DEFAULT_FRAMING_CONFIG.targetDeadZone *
-      Math.pow(5, 1 - 2 * sensitivity)
+    const targetDeadZone = 0.20 * Math.pow(0.015 / 0.20, sensitivity)
     const easingMs =
       DEFAULT_FRAMING_CONFIG.easingMs * Math.pow(5, 1 - 2 * speed)
 

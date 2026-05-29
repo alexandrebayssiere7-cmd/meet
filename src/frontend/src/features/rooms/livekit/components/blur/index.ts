@@ -66,9 +66,10 @@ export type ProcessorConfig =
        *  background image. Defaults to false ⇒ identity viewport, no zoom. */
       framingEnabled?: boolean
       /** Reactivity to small subject movements, in [0, 1]. Drives the
-       *  controller's target dead-zone via deadZone = 0.015 × 5^(1 − 2x).
-       *  0 ⇒ × 5 (very tolerant), 0.5 ⇒ × 1 (default), 1 ⇒ × 0.2 (follows
-       *  every micro-motion). */
+       *  controller's target dead-zone via deadZone = 0.20 × (0.075)^x.
+       *  0 ⇒ 20 % (very tolerant), 0.5 ⇒ 5.5 % (default), 1 ⇒ 1.5 % (the
+       *  smallest useful threshold — RoiCropper already absorbs anything
+       *  smaller and real movements span ≥ 3 %). */
       framingSensitivity?: number
       /** Reactivity of the camera transition, in [0, 1]. Drives the easing
        *  duration via easingMs = 500 × 5^(1 − 2x). 0 ⇒ 2500 ms (cinematic),

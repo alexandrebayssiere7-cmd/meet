@@ -1673,7 +1673,9 @@ export const EffectsConfiguration = ({
                   </label>
                   <SliderRow
                     label={t('advanced.framing.sensitivity')}
-                    displayValue={`${Math.round(framingSensitivity * 100)} %`}
+                    displayValue={`${(
+                      0.2 * Math.pow(0.015 / 0.2, framingSensitivity) * 100
+                    ).toFixed(1)} %`}
                     value={framingSensitivity}
                     min={0}
                     max={1}
@@ -1683,7 +1685,9 @@ export const EffectsConfiguration = ({
                   />
                   <SliderRow
                     label={t('advanced.framing.speed')}
-                    displayValue={`${Math.round(framingSpeed * 100)} %`}
+                    displayValue={`${Math.round(
+                      500 * Math.pow(5, 1 - 2 * framingSpeed)
+                    )} ms`}
                     value={framingSpeed}
                     min={0}
                     max={1}
