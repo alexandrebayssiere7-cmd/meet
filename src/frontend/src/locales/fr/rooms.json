@@ -274,6 +274,9 @@
         "title": "Pré-traitement",
         "roiCropping": "Recadrage sur la personne (ROI)"
       },
+      "framing": {
+        "enabled": "Activer le zoom automatique sur la personne (fond virtuel uniquement)"
+      },
       "postProcessing": {
         "title": "Post-traitement",
         "sigmoid": "Sigmoid",

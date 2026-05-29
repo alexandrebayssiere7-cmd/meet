@@ -553,16 +553,23 @@ export class WebGl2Renderer implements GpuRenderer {
       bgTex === this.virtualBgTex
     ) {
       // Auto-framing pre-passes: produce "framed" video + mask textures via a
-      // viewport remap. Everything downstream operates on these, so the person
-      // is zoomed/recentred while the background image stays anchored.
-      // Identity viewport ⇒ trivial blit.
-      this._ensureFramedTargets()
-      this._renderFramedRgb(this.videoTex, this.fboFramedVideo!)
-      this._renderFramedR(finalMaskTex, this.fboFramedMask!)
+      // viewport remap so the person is zoomed/recentred while the background
+      // image stays anchored. Skipped at identity viewport to keep the exact
+      // arthur-branch path (no extra GPU blit, no resample) when framing is
+      // disabled.
+      let videoForComposite: WebGLTexture = this.videoTex
+      let maskForComposite: WebGLTexture = finalMaskTex
+      if (!this._isIdentityViewport()) {
+        this._ensureFramedTargets()
+        this._renderFramedRgb(this.videoTex, this.fboFramedVideo!)
+        this._renderFramedR(finalMaskTex, this.fboFramedMask!)
+        videoForComposite = this.framedVideoTex!
+        maskForComposite = this.framedMaskTex!
+      }
       this.segmoCompositor.composite(
-        this.framedVideoTex!,
+        videoForComposite,
         bgTex,
-        this.framedMaskTex!,
+        maskForComposite,
         this.virtualBgTex,
         this.virtualImgUploaded,
         this.outW,
@@ -830,6 +837,11 @@ export class WebGl2Renderer implements GpuRenderer {
    * Used only by the segmo virtual-bg path. Dropped on resizeOutput so they're
    * reallocated at the new size.
    */
+  private _isIdentityViewport(): boolean {
+    const vp = this.viewport
+    return vp.x === 0 && vp.y === 0 && vp.width === 1 && vp.height === 1
+  }
+
   private _ensureFramedTargets() {
     if (
       this.framedVideoTex && this.fboFramedVideo &&

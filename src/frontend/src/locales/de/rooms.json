@@ -274,6 +274,9 @@
         "title": "Vorverarbeitung",
         "roiCropping": "Personenausschnitt (ROI)"
       },
+      "framing": {
+        "enabled": "Auto-Zoom auf die Person aktivieren (nur virtueller Hintergrund)"
+      },
       "postProcessing": {
         "title": "Nachbearbeitung",
         "sigmoid": "Sigmoid",

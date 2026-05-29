@@ -274,6 +274,9 @@
         "title": "Pre-processing",
         "roiCropping": "Person crop (ROI)"
       },
+      "framing": {
+        "enabled": "Enable auto-zoom on the person (virtual background only)"
+      },
       "postProcessing": {
         "title": "Post-processing",
         "sigmoid": "Sigmoid",

@@ -62,6 +62,9 @@ export type ProcessorConfig =
       latencyMode?: LatencyMode
       latencyAuto?: boolean
       maskPrediction?: boolean
+      /** Auto-framing (zoom + recentre) pass. Only meaningful with a virtual
+       *  background image. Defaults to false ⇒ identity viewport, no zoom. */
+      framingEnabled?: boolean
     }
   | ({ type: ProcessorType.FACE_LANDMARKS } & FaceLandmarksOptions)
 

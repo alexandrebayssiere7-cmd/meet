@@ -357,6 +357,12 @@ export const EffectsConfiguration = ({
   const [roiCroppingEnabled, setRoiCroppingEnabled] = useState(
     !!initialPRE.roiCropping?.enabled
   )
+  const initialFramingEnabled: boolean =
+    processorConfig?.type === ProcessorType.VIRTUAL &&
+    processorConfig.framingEnabled === true
+  const [framingEnabled, setFramingEnabled] = useState<boolean>(
+    initialFramingEnabled
+  )
   const [model, setModel] = useState<SegmentationModel>(initialModel)
   const initialRvmRatio: number | undefined =
     processorConfig &&
@@ -469,10 +475,22 @@ export const EffectsConfiguration = ({
 
   const withAdvanced = useCallback(
     (config: ProcessorConfig): ProcessorConfig => {
-      if (
-        config.type === ProcessorType.BLUR ||
-        config.type === ProcessorType.VIRTUAL
-      ) {
+      if (config.type === ProcessorType.VIRTUAL) {
+        return {
+          ...config,
+          model,
+          preProcessing: buildPreProcessing(),
+          rvmDownsampleRatio:
+            model === SegmentationModel.RVM && rvmManual ? rvmRatio : undefined,
+          postProcessing: buildPostProcessing(),
+          upsampling: buildUpsampling(),
+          latencyMode,
+          latencyAuto,
+          maskPrediction,
+          framingEnabled,
+        }
+      }
+      if (config.type === ProcessorType.BLUR) {
         return {
           ...config,
           model,
@@ -498,6 +516,7 @@ export const EffectsConfiguration = ({
       latencyMode,
       latencyAuto,
       maskPrediction,
+      framingEnabled,
     ]
   )
 
@@ -1615,6 +1634,23 @@ export const EffectsConfiguration = ({
                     />
                     <Text variant="sm">
                       {t('advanced.preProcessing.roiCropping')}
+                    </Text>
+                  </label>
+                  <label
+                    className={css({
+                      display: 'flex',
+                      gap: '0.4rem',
+                      alignItems: 'center',
+                      cursor: 'pointer',
+                    })}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={framingEnabled}
+                      onChange={(e) => setFramingEnabled(e.target.checked)}
+                    />
+                    <Text variant="sm">
+                      {t('advanced.framing.enabled')}
                     </Text>
                   </label>
                 </div>

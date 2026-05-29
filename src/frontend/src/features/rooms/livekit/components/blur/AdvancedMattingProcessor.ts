@@ -137,9 +137,13 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
 
   // Auto-framing pass: useful with a fixed virtual background. With blur the
   // recentred crop reveals the rest of the camera frame at the edges, which
-  // breaks the illusion of a stable scene — so we skip it there.
+  // breaks the illusion of a stable scene — so we skip it there. Opt-in via
+  // ProcessorConfig.framingEnabled; default = off ⇒ identity viewport, the
+  // segmo composite then operates on the unchanged frame/mask textures.
   private _applyFraming(gpuRenderer: GpuRenderer, aspect: number, now: number) {
-    const framingEnabled = this.options.type === ProcessorType.VIRTUAL
+    const framingEnabled =
+      this.options.type === ProcessorType.VIRTUAL &&
+      this.options.framingEnabled === true
     const personBbox = this._preProcessingPipeline?.getCurrentBbox() ?? null
     this._framingController.update(personBbox, aspect, now, {
       ...DEFAULT_FRAMING_CONFIG,
