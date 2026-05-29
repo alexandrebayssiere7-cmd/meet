@@ -1,6 +1,12 @@
 /**
- * Debug logging for the matting pipeline. Silent by default in production.
- * Opted in via the `?mattingDebug=1` query string 
+ * Debug logging utilities for the matting pipeline. Silent by default;
+ * enabled by adding ?mattingDebug=1 to the page URL.
+ *
+ * Called by: AdvancedMattingProcessor, SegmenterBenchmarker.
+ *
+ * Pipeline role: Passive utility with no effect on the processing path.
+ * Wraps console.log/warn behind the mattingDebugEnabled() gate so verbose
+ * timing and benchmark logs are opt-in and never reach production users.
  */
 let cached: boolean | null = null
 

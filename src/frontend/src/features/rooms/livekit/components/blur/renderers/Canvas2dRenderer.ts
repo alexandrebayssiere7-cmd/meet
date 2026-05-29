@@ -1,4 +1,16 @@
-import { PostProcessingConfig, UpsamplingConfig } from '..'
+/**
+ * Canvas2D fallback renderer used when WebGL2 is unavailable.
+ *
+ * Called by: AdvancedMattingProcessor._initRendererWithFallback() — used only
+ * after WebGl2Renderer.init() throws (no GPU, GPU blacklisted, low-power mode).
+ *
+ * Pipeline role: Degraded but functional compositor. Implements the same
+ * GpuRenderer interface as WebGl2Renderer so the rest of the pipeline is
+ * unaware of the fallback. Supports blur (ctx.filter) and virtual background;
+ * only honours the temporal EMA from PostProcessingConfig — morphological
+ * opening/closing and guided filter upsampling are skipped on this path.
+ */
+import { PostProcessingConfig } from '..'
 import { pushMattingError } from '../errors/MattingErrorStore'
 import { GpuRenderer, GpuRendererInitOpts, RenderSource } from './GpuRenderer'
 
@@ -153,7 +165,7 @@ export class Canvas2dRenderer implements GpuRenderer {
     if (this.emaAlpha === 0) this.emaPrevMask = null
   }
 
-  setUpsampling(_cfg: UpsamplingConfig): void {}
+  setUpsampling(): void {}
 
   render(source: RenderSource): void {
     if (!source) return

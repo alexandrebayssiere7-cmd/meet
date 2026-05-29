@@ -1,8 +1,20 @@
+/**
+ * Async segmenter loop — the inference half of the two-loop engine.
+ *
+ * Called by: AdvancedMattingProcessor._initRunners() (construction) and
+ * _launch() (start/stop).
+ *
+ * Pipeline role: Runs an async while-loop paced by VideoFrameTracker.
+ * Each iteration captures a video snapshot, optionally crops via
+ * PreProcessingPipeline, runs the segmenter, then calls onPairProduced
+ * with the resulting {mask, source, timing} pair. Decoupled from the render
+ * loop: segmentation speed and rendering speed are independent; the render
+ * loop always reads the latest pair without blocking on inference.
+ */
 import { Segmenter } from './Segmenter'
 import { PreProcessingPipeline } from '../preprocessing/PreProcessingPipeline'
 import { MattingCanvasManager } from '../preprocessing/MattingCanvasManager'
 import { VideoFrameTracker } from '../preprocessing/VideoFrameTracker'
-import { pushMattingError } from '../errors/MattingErrorStore'
 
 export interface FrameMaskPair {
   mask: Float32Array

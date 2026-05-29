@@ -1,3 +1,14 @@
+/**
+ * MediaPipe binary Selfie Segmenter in landscape mode (256×144).
+ *
+ * Called by: segmenters/index.ts createSegmenter() and
+ * AdvancedMattingProcessor._createAndCalibrateSegmenter() when the device
+ * cannot sustain the multiclass model or SegmentationModel.LANDSCAPE is set.
+ *
+ * Pipeline role: The lighter of the two segmenters. segment() returns a
+ * Float32Array where high values indicate the person (foreground). Reuses a
+ * single output buffer across frames to avoid per-frame GC pressure.
+ */
 import { ImageSegmenter, ImageSegmenterResult } from '@mediapipe/tasks-vision'
 import {
   Segmenter,

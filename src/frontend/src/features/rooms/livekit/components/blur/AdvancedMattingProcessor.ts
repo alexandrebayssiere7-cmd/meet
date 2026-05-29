@@ -1,3 +1,16 @@
+/**
+ * Main orchestrator of the background matting pipeline.
+ *
+ * Called by: BackgroundProcessorFactory.getProcessor() in index.ts.
+ *
+ * Pipeline role: Implements the LiveKit TrackProcessor interface and wires
+ * together all sub-modules into the two-loop engine:
+ *   - SegmenterLoopRunner: async inference loop paced by rVFC
+ *   - RenderLoopRunner: rAF render loop that composites the latest mask
+ * Runs the startup benchmark (SegmenterBenchmarker) to pick the best model
+ * and frame-skip for the current device, and falls back from WebGL2 to
+ * Canvas2D if the GPU is unavailable.
+ */
 import { ProcessorOptions, Track } from 'livekit-client'
 import {
   BackgroundProcessorInterface,

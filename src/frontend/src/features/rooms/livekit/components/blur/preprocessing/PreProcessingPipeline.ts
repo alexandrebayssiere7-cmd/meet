@@ -1,3 +1,17 @@
+/**
+ * Thin facade that orchestrates pre-processing filters applied around the
+ * segmentation model inference step.
+ *
+ * Called by: AdvancedMattingProcessor._applyRendererConfig() (creates it when
+ * roiCropping is enabled), SegmenterLoopRunner (calls getNextCropBbox and
+ * applyAfterInference each frame).
+ *
+ * Pipeline role: Sits between the canvas snapshot and the segmenter. Currently
+ * wraps a single filter (RoiCropper): getNextCropBbox() is called before
+ * sizeSource() to crop the model input, and applyAfterInference() is called
+ * after segment() to remap the crop-space mask back to full-frame space and
+ * update the stable bbox for the next frame.
+ */
 import { PreProcessingConfig } from '..'
 import { BBox, RoiCropper } from './RoiCropper'
 

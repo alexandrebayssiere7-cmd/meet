@@ -1,3 +1,16 @@
+/**
+ * Manages the off-screen canvases used by the segmenter loop.
+ *
+ * Called by: AdvancedMattingProcessor (owns the instance), SegmenterLoopRunner
+ * (consumes captureSnapshot, sizeSource, getMotionFrameRgba).
+ *
+ * Pipeline role: Creates and maintains three canvases:
+ *   - snapshot canvas  (video res)   — atomic reference frame for a pipeline tick
+ *   - motion canvas    (128×72)      — down-sampled luma for RoiCropper motion detection
+ *   - segmentation canvas (procW×procH) — model input after optional crop + resize
+ * Also supplies the all-ones passthrough mask used before the first real
+ * segmentation result is available.
+ */
 import { BBox } from './RoiCropper'
 
 const SEGMENTATION_MASK_CANVAS_ID = 'background-blur-local-segmentation'

@@ -1,3 +1,16 @@
+/**
+ * Base interface and shared utilities for the segmenter subsystem.
+ *
+ * Called by: LandscapeSegmenter, MulticlassSegmenter (implement Segmenter),
+ * segmenters/index.ts and SegmenterBenchmarker (use probeMediapipeDelegate),
+ * SegmenterLoopRunner (depends on the Segmenter interface).
+ *
+ * Pipeline role: Defines the uniform segment() contract so the rest of the
+ * pipeline is decoupled from the choice of model. Caches the MediaPipe WASM
+ * bundle (getMediapipeFileset) and the session-level GPU/CPU delegate probe
+ * (probeMediapipeDelegate) so they are loaded only once regardless of how
+ * many segmenter instances are created.
+ */
 import { FilesetResolver, ImageSegmenter } from '@mediapipe/tasks-vision'
 
 type MediapipeFileset = Awaited<
