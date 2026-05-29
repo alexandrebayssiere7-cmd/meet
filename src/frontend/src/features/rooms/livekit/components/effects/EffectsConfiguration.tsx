@@ -42,7 +42,7 @@ import { useMattingErrors } from '../blur/errors/MattingErrorStore'
 enum BlurRadius {
   NONE = 0,
   LIGHT = 10,
-  NORMAL = 50,
+  NORMAL = 20,
 }
 
 const isSupported = BackgroundProcessorFactory.isSupported()
