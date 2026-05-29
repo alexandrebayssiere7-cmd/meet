@@ -1,25 +1,34 @@
 /**
- * GPU implementation of the guided filter for mask upsampling.
+ * GPU implementation of the FAST guided filter (He & Sun, 2015) for mask upsampling.
  *
  * Upsamples a low-resolution mask (procW×procH) to full output resolution
- * (outW×outH) using the full-resolution RGB video frame as guide.
+ * (outW×outH) using the RGB video frame as guide.
+ *
+ * Speed trick: the expensive box-filtered statistics (stats1..4, solve, coeff
+ * smoothing) run at LOW resolution (statsW×statsH ≈ outW/2). The final "apply"
+ * pass runs at FULL resolution, sampling the LOW-res coefficient texture with
+ * LINEAR filtering — GL bilinearly upsamples a,b for free — and the FULL-res
+ * video as the guide. Result: ~4× less compute, edge precision preserved
+ * because the final pixel-wise application still uses the full-res guide.
  *
  * Algorithm (He et al., 2013 — RGB variant):
- *   For each window W_k of radius r centred at pixel k in the guide I=[R,G,B]:
+ *   For each window W_k of radius r centred at pixel k in the LOW-res guide I=[R,G,B]:
  *     Σ_k  = RGB covariance matrix of I in W_k  + ε·I₃
  *     c_k  = [cov(R,p), cov(G,p), cov(B,p)] in W_k  (p = bilinear-upsampled mask)
  *     a_k  = Σ_k⁻¹ · c_k        (3-vector)
  *     b_k  = mean_p - a_k · mean_I
- *   Output: q(x) = mean_{k∈W_x}(a_k) · I(x) + mean_{k∈W_x}(b_k)
+ *   Output: q(x) = mean_{k∈W_x}(a_k) · I_full(x) + mean_{k∈W_x}(b_k)   [@ full res]
  *
- * Passes (all at outW×outH, RGBA32F intermediates):
+ * Passes:
+ *   ─ stats/coeff at statsW×statsH, RGBA16F ─
  *   H/V box of (R, G, B, p)        → stats1
  *   H/V box of (R², RG, RB, G²)    → stats2
  *   H/V box of (GB, B², Rp, Gp)    → stats3
  *   H/V box of (Bp)                → stats4
  *   solve a,b from stats            → coeff
- *   H/V box of (a_r, a_g, a_b, b)  → coeffMean
- *   apply: q = coeffMean·I + b      → out  (.r channel = upsampled mask)
+ *   H/V box of (a_r, a_g, a_b, b)  → coeffMean   (LINEAR filter)
+ *   ─ apply at outW×outH, RGBA16F ─
+ *   apply: q = coeffMean·I_full + b → out  (.r channel = upsampled mask)
  *
  * Requires EXT_color_buffer_float (WebGL2, widely supported).
  */
@@ -198,10 +207,15 @@ void main() {
 
 export class GpuGuidedFilter {
   private gl: WebGL2RenderingContext
+  // Low-res "stats" plane: every box-filter pass (the expensive part) runs here.
+  private statsW: number
+  private statsH: number
+  // Full-res "apply" plane: only the final per-pixel apply pass renders here.
   private outW: number
   private outH: number
 
-  // Intermediate textures (all RGBA32F at outW×outH)
+  // Intermediate textures (RGBA16F). All stats/coeff textures are at statsW×statsH.
+  // gfOut is at outW×outH (final apply pass writes here).
   private gfH!: WebGLTexture
   private gfStats1!: WebGLTexture
   private gfStats2!: WebGLTexture
@@ -271,24 +285,34 @@ export class GpuGuidedFilter {
     uCoeffMean: WebGLUniformLocation | null
   }
 
-  constructor(gl: WebGL2RenderingContext, outW: number, outH: number) {
+  constructor(
+    gl: WebGL2RenderingContext,
+    statsW: number,
+    statsH: number,
+    outW: number,
+    outH: number
+  ) {
     this.gl = gl
+    this.statsW = statsW
+    this.statsH = statsH
     this.outW = outW
     this.outH = outH
     this._build()
   }
 
   /**
-   * Run guided filter upsampling.
-   * @param videoTex  Full-res RGBA8 video texture (outW×outH).
-   * @param maskTex   Low-res R8 mask texture (procW×procH), LINEAR filtered.
-   * @param radius    Box filter radius in output pixels.
-   * @param eps       Regularisation ε.
-   * @param vao       The full-screen triangle VAO from the parent renderer.
-   * @returns         RGBA32F texture (outW×outH) whose .r channel is the upsampled mask.
+   * Run fast guided filter upsampling.
+   * @param videoTexLow   Low-res RGBA8 guide (statsW×statsH) — used by stats passes.
+   * @param videoTexFull  Full-res RGBA8 guide (outW×outH) — used by the apply pass.
+   * @param maskTex       Low-res R8 mask texture (procW×procH), LINEAR filtered.
+   * @param radius        Box filter radius in LOW-res pixels (covers 2r LOW pixels = 4r FULL).
+   * @param eps           Regularisation ε.
+   * @param vao           The full-screen triangle VAO from the parent renderer.
+   * @returns             RGBA16F texture (outW×outH) whose .r channel is the upsampled mask.
    */
   run(
-    videoTex: WebGLTexture,
+    videoTexLow: WebGLTexture,
+    videoTexFull: WebGLTexture,
     maskTex: WebGLTexture,
     radius: number,
     eps: number,
@@ -296,10 +320,11 @@ export class GpuGuidedFilter {
   ): WebGLTexture {
     const gl = this.gl
     const r = Math.max(1, Math.round(radius))
-    const texelX = 1.0 / this.outW
-    const texelY = 1.0 / this.outH
+    const texelX = 1.0 / this.statsW
+    const texelY = 1.0 / this.statsH
 
-    gl.viewport(0, 0, this.outW, this.outH)
+    // All stats and coeff passes render at low resolution.
+    gl.viewport(0, 0, this.statsW, this.statsH)
 
     const draw = () => {
       gl.bindVertexArray(vao)
@@ -314,7 +339,7 @@ export class GpuGuidedFilter {
     // ── stats1: box(R, G, B, p) ──────────────────────────────────────────────
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboH)
     gl.useProgram(this.pHStats1)
-    bindTex(0, videoTex)
+    bindTex(0, videoTexLow)
     bindTex(1, maskTex)
     gl.uniform1i(this.uHStats1.uVideo, 0)
     gl.uniform1i(this.uHStats1.uMask, 1)
@@ -333,7 +358,7 @@ export class GpuGuidedFilter {
     // ── stats2: box(R², RG, RB, G²) ─────────────────────────────────────────
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboH)
     gl.useProgram(this.pHStats2)
-    bindTex(0, videoTex)
+    bindTex(0, videoTexLow)
     gl.uniform1i(this.uHStats2.uVideo, 0)
     gl.uniform1f(this.uHStats2.uTexelX, texelX)
     gl.uniform1i(this.uHStats2.uRadius, r)
@@ -350,7 +375,7 @@ export class GpuGuidedFilter {
     // ── stats3: box(GB, B², Rp, Gp) ─────────────────────────────────────────
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboH)
     gl.useProgram(this.pHStats3)
-    bindTex(0, videoTex)
+    bindTex(0, videoTexLow)
     bindTex(1, maskTex)
     gl.uniform1i(this.uHStats3.uVideo, 0)
     gl.uniform1i(this.uHStats3.uMask, 1)
@@ -369,7 +394,7 @@ export class GpuGuidedFilter {
     // ── stats4: box(Bp) ──────────────────────────────────────────────────────
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboH)
     gl.useProgram(this.pHStats4)
-    bindTex(0, videoTex)
+    bindTex(0, videoTexLow)
     bindTex(1, maskTex)
     gl.uniform1i(this.uHStats4.uVideo, 0)
     gl.uniform1i(this.uHStats4.uMask, 1)
@@ -416,10 +441,11 @@ export class GpuGuidedFilter {
     gl.uniform1i(this.uBox.uRadius, r)
     draw()
 
-    // ── apply q = coeffMean · I + b ──────────────────────────────────────────
+    // ── apply q = coeffMean · I + b   (FULL-res; coeffMean is bilinearly upsampled by GL) ──
+    gl.viewport(0, 0, this.outW, this.outH)
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboOut)
     gl.useProgram(this.pApply)
-    bindTex(0, videoTex)
+    bindTex(0, videoTexFull)
     bindTex(1, this.gfCoeffMean)
     gl.uniform1i(this.uApply.uVideo, 0)
     gl.uniform1i(this.uApply.uCoeffMean, 1)
@@ -475,18 +501,18 @@ export class GpuGuidedFilter {
       )
     }
 
-    const makeTex = () => {
+    const makeTex = (w: number, h: number) => {
       const t = gl.createTexture()!
       gl.bindTexture(gl.TEXTURE_2D, t)
       gl.texImage2D(
         gl.TEXTURE_2D,
         0,
-        gl.RGBA32F,
-        this.outW,
-        this.outH,
+        gl.RGBA16F,
+        w,
+        h,
         0,
         gl.RGBA,
-        gl.FLOAT,
+        gl.HALF_FLOAT,
         null
       )
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
@@ -513,14 +539,27 @@ export class GpuGuidedFilter {
       return f
     }
 
-    this.gfH = makeTex()
-    this.gfStats1 = makeTex()
-    this.gfStats2 = makeTex()
-    this.gfStats3 = makeTex()
-    this.gfStats4 = makeTex()
-    this.gfCoeff = makeTex()
-    this.gfCoeffMean = makeTex()
-    this.gfOut = makeTex()
+    // Stats & coeff intermediates: low-res (the expensive box-filter plane).
+    this.gfH = makeTex(this.statsW, this.statsH)
+    this.gfStats1 = makeTex(this.statsW, this.statsH)
+    this.gfStats2 = makeTex(this.statsW, this.statsH)
+    this.gfStats3 = makeTex(this.statsW, this.statsH)
+    this.gfStats4 = makeTex(this.statsW, this.statsH)
+    this.gfCoeff = makeTex(this.statsW, this.statsH)
+    this.gfCoeffMean = makeTex(this.statsW, this.statsH)
+    // gfCoeffMean is sampled at FULL-res UV by the apply pass → LINEAR makes GL
+    // bilinearly upsample the (a, b) coefficients for free. This is the key
+    // fast-guided-filter trick: cheap stats at low res, exact apply at full res.
+    gl.bindTexture(gl.TEXTURE_2D, this.gfCoeffMean)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+
+    // Final output: full-res. LINEAR so downstream compositor can read with
+    // sub-pixel mask-warp offsets without aliasing.
+    this.gfOut = makeTex(this.outW, this.outH)
+    gl.bindTexture(gl.TEXTURE_2D, this.gfOut)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
 
     this.fboH = makeFbo(this.gfH)
     this.fboStats1 = makeFbo(this.gfStats1)

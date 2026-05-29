@@ -80,6 +80,7 @@ export class WebGl2Renderer implements GpuRenderer {
   private bgDownTex!: WebGLTexture // RGBA half-res masked downsample
   private bgBlurPingTex!: WebGLTexture // RGBA half-res after H blur
   private bgBlurPongTex!: WebGLTexture // RGBA half-res after V blur
+  private halfVideoTex: WebGLTexture | null = null // RGBA half-res video guide for GF
   private virtualBgTex: WebGLTexture | null = null
 
   // FBOs
@@ -89,6 +90,7 @@ export class WebGl2Renderer implements GpuRenderer {
   private fboBgDown!: WebGLFramebuffer
   private fboBgBlurPing!: WebGLFramebuffer
   private fboBgBlurPong!: WebGLFramebuffer
+  private fboHalfVideo: WebGLFramebuffer | null = null
 
   private halfW = 0
   private halfH = 0
@@ -101,6 +103,9 @@ export class WebGl2Renderer implements GpuRenderer {
   // Cached uniform locations — resolved once in _buildPrograms(), reused every frame.
   // Eliminates ~43 string-lookup driver calls per frame.
   private uLoc!: {
+    copyR: {
+      uTex: WebGLUniformLocation | null
+    }
     maskedDown: {
       uFrame: WebGLUniformLocation | null
       uMask: WebGLUniformLocation | null
@@ -298,6 +303,20 @@ export class WebGl2Renderer implements GpuRenderer {
         null
       )
     }
+    if (this.halfVideoTex) {
+      gl.bindTexture(gl.TEXTURE_2D, this.halfVideoTex)
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA,
+        this.halfW,
+        this.halfH,
+        0,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        null
+      )
+    }
 
     // 3. Clear lazily-allocated Segmo textures so they get recreated at the new size
     this.segmoCompositor?.invalidateOnResize(gl)
@@ -456,7 +475,16 @@ export class WebGl2Renderer implements GpuRenderer {
   private _upsampleMask(procMaskTex: WebGLTexture): WebGLTexture {
     if (!this.gf) {
       try {
-        this.gf = new GpuGuidedFilter(this.gl, this.outW, this.outH)
+        // Fast guided filter:
+        //  - stats/coeff passes at halfW×halfH (the heavy work, 4× fewer pixels)
+        //  - final apply pass at outW×outH (uses full-res guide → preserves edge precision)
+        this.gf = new GpuGuidedFilter(
+          this.gl,
+          this.halfW,
+          this.halfH,
+          this.outW,
+          this.outH
+        )
       } catch (e) {
         pushMattingError({
           code: 'POSTPROCESS_SHADER_COMPILE_FAILED',
@@ -467,9 +495,30 @@ export class WebGl2Renderer implements GpuRenderer {
         return procMaskTex
       }
     }
+    const gl = this.gl
+    // Blit videoTex → halfVideoTex (1 draw call; GL bilinear handles the 2× downsample).
+    // The low-res guide is used by the GF's stats passes; the apply pass still
+    // samples the full-res videoTex so fine details (hair, edges) survive.
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboHalfVideo)
+    gl.viewport(0, 0, this.halfW, this.halfH)
+    gl.useProgram(this.pCopyR)
+    gl.activeTexture(gl.TEXTURE0)
+    gl.bindTexture(gl.TEXTURE_2D, this.videoTex)
+    gl.uniform1i(this.uLoc.copyR.uTex, 0)
+    this._drawQuad()
+
     const radius = this.upsamplingCfg.radius ?? 8
     const eps = this.upsamplingCfg.eps ?? 0.01
-    return this.gf.run(this.videoTex, procMaskTex, radius, eps, this.vao)
+    const result = this.gf.run(
+      this.halfVideoTex!,
+      this.videoTex,
+      procMaskTex,
+      radius,
+      eps,
+      this.vao
+    )
+    gl.viewport(0, 0, this.outW, this.outH)
+    return result
   }
 
   destroy() {
@@ -486,6 +535,7 @@ export class WebGl2Renderer implements GpuRenderer {
       this.bgDownTex,
       this.bgBlurPingTex,
       this.bgBlurPongTex,
+      this.halfVideoTex,
       this.virtualBgTex,
     ]
     for (const t of tex) if (t) gl.deleteTexture(t)
@@ -496,6 +546,7 @@ export class WebGl2Renderer implements GpuRenderer {
       this.fboBgDown,
       this.fboBgBlurPing,
       this.fboBgBlurPong,
+      this.fboHalfVideo,
     ]
     for (const f of fbo) if (f) gl.deleteFramebuffer(f)
     this.segmoCompositor?.destroyResources(gl)
@@ -730,6 +781,15 @@ export class WebGl2Renderer implements GpuRenderer {
     this.fboBgBlurPing = makeFbo(this.bgBlurPingTex)
     this.fboBgBlurPong = makeFbo(this.bgBlurPongTex)
 
+    this.halfVideoTex = makeTex(
+      this.halfW,
+      this.halfH,
+      gl.RGBA,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE
+    )
+    this.fboHalfVideo = makeFbo(this.halfVideoTex)
+
     gl.bindFramebuffer(gl.FRAMEBUFFER, null)
   }
 
@@ -782,6 +842,9 @@ export class WebGl2Renderer implements GpuRenderer {
     // through the GL driver which can stall the CPU-GPU pipeline.
     const loc = (p: WebGLProgram, n: string) => this.gl.getUniformLocation(p, n)
     this.uLoc = {
+      copyR: {
+        uTex: loc(this.pCopyR, 'uTex'),
+      },
       maskedDown: {
         uFrame: loc(this.pMaskedDownsample, 'uFrame'),
         uMask: loc(this.pMaskedDownsample, 'uMask'),
