@@ -275,7 +275,9 @@
         "roiCropping": "Person crop (ROI)"
       },
       "framing": {
-        "enabled": "Enable auto-zoom on the person (virtual background only)"
+        "enabled": "Enable auto-zoom on the person (virtual background only)",
+        "sensitivity": "Movement sensitivity",
+        "speed": "Camera speed"
       },
       "postProcessing": {
         "title": "Post-processing",

@@ -275,7 +275,9 @@
         "roiCropping": "Recadrage sur la personne (ROI)"
       },
       "framing": {
-        "enabled": "Activer le zoom automatique sur la personne (fond virtuel uniquement)"
+        "enabled": "Activer le zoom automatique sur la personne (fond virtuel uniquement)",
+        "sensitivity": "Réactivité aux mouvements",
+        "speed": "Vitesse de la caméra"
       },
       "postProcessing": {
         "title": "Post-traitement",

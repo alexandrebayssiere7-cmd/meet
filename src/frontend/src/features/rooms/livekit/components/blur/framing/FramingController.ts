@@ -26,6 +26,10 @@ export interface FramingConfig {
   anchorYFraction: number
   /** Duration of the cubic ease-in-out between two stable viewports, ms. */
   easingMs: number
+  /** Minimum target-viewport change (per component, in UV) needed to start a
+   *  new easing. Smaller values follow micro-jitter; larger values stay put
+   *  until the subject moves significantly. */
+  targetDeadZone: number
   /** When false, target snaps to identity and the current viewport eases back to full frame. */
   enabled: boolean
 }
@@ -36,12 +40,11 @@ export const DEFAULT_FRAMING_CONFIG: FramingConfig = {
   paddingRatio: 0.15,
   anchorYFraction: 1.0,
   easingMs: 500,
+  targetDeadZone: 0.015,
   enabled: false,
 }
 
 const IDENTITY: Viewport = { x: 0, y: 0, width: 1, height: 1 }
-
-const TARGET_DEAD_ZONE = 0.015
 
 function easeInOutCubic(t: number): number {
   if (t <= 0) return 0
@@ -186,7 +189,7 @@ export class FramingController {
     }
 
     // Second-level dead zone: avoid restarting the easing on every micro-jitter.
-    if (!viewportsEqual(nextTarget, this.targetViewport, TARGET_DEAD_ZONE)) {
+    if (!viewportsEqual(nextTarget, this.targetViewport, cfg.targetDeadZone)) {
       this.startViewport = { ...this.currentViewport }
       this.targetViewport = nextTarget
       this.animStartMs = nowMs

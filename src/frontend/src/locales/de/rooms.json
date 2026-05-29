@@ -275,7 +275,9 @@
         "roiCropping": "Personenausschnitt (ROI)"
       },
       "framing": {
-        "enabled": "Auto-Zoom auf die Person aktivieren (nur virtueller Hintergrund)"
+        "enabled": "Auto-Zoom auf die Person aktivieren (nur virtueller Hintergrund)",
+        "sensitivity": "Bewegungsempfindlichkeit",
+        "speed": "Kamerageschwindigkeit"
       },
       "postProcessing": {
         "title": "Nachbearbeitung",

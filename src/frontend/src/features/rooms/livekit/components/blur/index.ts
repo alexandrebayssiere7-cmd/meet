@@ -65,6 +65,15 @@ export type ProcessorConfig =
       /** Auto-framing (zoom + recentre) pass. Only meaningful with a virtual
        *  background image. Defaults to false ⇒ identity viewport, no zoom. */
       framingEnabled?: boolean
+      /** Reactivity to small subject movements, in [0, 1]. Drives the
+       *  controller's target dead-zone via deadZone = 0.015 × 5^(1 − 2x).
+       *  0 ⇒ × 5 (very tolerant), 0.5 ⇒ × 1 (default), 1 ⇒ × 0.2 (follows
+       *  every micro-motion). */
+      framingSensitivity?: number
+      /** Reactivity of the camera transition, in [0, 1]. Drives the easing
+       *  duration via easingMs = 500 × 5^(1 − 2x). 0 ⇒ 2500 ms (cinematic),
+       *  0.5 ⇒ 500 ms (default), 1 ⇒ 100 ms (near-snap). */
+      framingSpeed?: number
     }
   | ({ type: ProcessorType.FACE_LANDMARKS } & FaceLandmarksOptions)
 

@@ -275,7 +275,9 @@
         "roiCropping": "Persoonsuitsnede (ROI)"
       },
       "framing": {
-        "enabled": "Auto-zoom op de persoon inschakelen (alleen virtuele achtergrond)"
+        "enabled": "Auto-zoom op de persoon inschakelen (alleen virtuele achtergrond)",
+        "sensitivity": "Bewegingsgevoeligheid",
+        "speed": "Camerasnelheid"
       },
       "postProcessing": {
         "title": "Nabewerking",

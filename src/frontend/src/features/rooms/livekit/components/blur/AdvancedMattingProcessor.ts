@@ -141,13 +141,33 @@ export class AdvancedMattingProcessor implements BackgroundProcessorInterface {
   // ProcessorConfig.framingEnabled; default = off ⇒ identity viewport, the
   // segmo composite then operates on the unchanged frame/mask textures.
   private _applyFraming(gpuRenderer: GpuRenderer, aspect: number, now: number) {
-    const framingEnabled =
-      this.options.type === ProcessorType.VIRTUAL &&
-      this.options.framingEnabled === true
+    let framingEnabled = false
+    // User-facing sliders, both in [0, 1], default 0.5 = current behaviour.
+    // Exponential mapping (× 0.2 to × 5 around the default) so each unit of
+    // slider travel produces a roughly equal perceptual change.
+    let sensitivity = 0.5
+    let speed = 0.5
+    if (this.options.type === ProcessorType.VIRTUAL) {
+      framingEnabled = this.options.framingEnabled === true
+      if (typeof this.options.framingSensitivity === 'number') {
+        sensitivity = this.options.framingSensitivity
+      }
+      if (typeof this.options.framingSpeed === 'number') {
+        speed = this.options.framingSpeed
+      }
+    }
+    const targetDeadZone =
+      DEFAULT_FRAMING_CONFIG.targetDeadZone *
+      Math.pow(5, 1 - 2 * sensitivity)
+    const easingMs =
+      DEFAULT_FRAMING_CONFIG.easingMs * Math.pow(5, 1 - 2 * speed)
+
     const personBbox = this._preProcessingPipeline?.getCurrentBbox() ?? null
     this._framingController.update(personBbox, aspect, now, {
       ...DEFAULT_FRAMING_CONFIG,
       enabled: framingEnabled,
+      targetDeadZone,
+      easingMs,
     })
     gpuRenderer.setViewport(this._framingController.getViewport())
   }

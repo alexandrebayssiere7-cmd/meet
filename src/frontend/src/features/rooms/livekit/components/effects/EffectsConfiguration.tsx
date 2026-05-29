@@ -363,6 +363,20 @@ export const EffectsConfiguration = ({
   const [framingEnabled, setFramingEnabled] = useState<boolean>(
     initialFramingEnabled
   )
+  const initialFramingSensitivity: number =
+    processorConfig?.type === ProcessorType.VIRTUAL &&
+    typeof processorConfig.framingSensitivity === 'number'
+      ? processorConfig.framingSensitivity
+      : 0.5
+  const initialFramingSpeed: number =
+    processorConfig?.type === ProcessorType.VIRTUAL &&
+    typeof processorConfig.framingSpeed === 'number'
+      ? processorConfig.framingSpeed
+      : 0.5
+  const [framingSensitivity, setFramingSensitivity] = useState<number>(
+    initialFramingSensitivity
+  )
+  const [framingSpeed, setFramingSpeed] = useState<number>(initialFramingSpeed)
   const [model, setModel] = useState<SegmentationModel>(initialModel)
   const initialRvmRatio: number | undefined =
     processorConfig &&
@@ -488,6 +502,8 @@ export const EffectsConfiguration = ({
           latencyAuto,
           maskPrediction,
           framingEnabled,
+          framingSensitivity,
+          framingSpeed,
         }
       }
       if (config.type === ProcessorType.BLUR) {
@@ -517,6 +533,8 @@ export const EffectsConfiguration = ({
       latencyAuto,
       maskPrediction,
       framingEnabled,
+      framingSensitivity,
+      framingSpeed,
     ]
   )
 
@@ -1653,6 +1671,26 @@ export const EffectsConfiguration = ({
                       {t('advanced.framing.enabled')}
                     </Text>
                   </label>
+                  <SliderRow
+                    label={t('advanced.framing.sensitivity')}
+                    displayValue={`${Math.round(framingSensitivity * 100)} %`}
+                    value={framingSensitivity}
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    disabled={!framingEnabled}
+                    onChange={setFramingSensitivity}
+                  />
+                  <SliderRow
+                    label={t('advanced.framing.speed')}
+                    displayValue={`${Math.round(framingSpeed * 100)} %`}
+                    value={framingSpeed}
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    disabled={!framingEnabled}
+                    onChange={setFramingSpeed}
+                  />
                 </div>
 
                 <H
