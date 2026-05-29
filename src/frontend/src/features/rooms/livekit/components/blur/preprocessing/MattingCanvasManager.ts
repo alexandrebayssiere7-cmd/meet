@@ -9,7 +9,6 @@ export class MattingCanvasManager {
   private _motionCanvas?: HTMLCanvasElement
   private _motionCanvasCtx?: CanvasRenderingContext2D
 
-  private _segmentationMaskCanvas?: HTMLCanvasElement
   private _segmentationMaskCanvasCtx?: CanvasRenderingContext2D
 
   private _passthroughMask?: Float32Array
@@ -121,7 +120,6 @@ export class MattingCanvasManager {
         canvas.setAttribute('height', '' + processingH)
       }
     }
-    this._segmentationMaskCanvas = canvas
     if (!this._segmentationMaskCanvasCtx || this._segmentationMaskCanvasCtx.canvas !== canvas) {
       this._segmentationMaskCanvasCtx = canvas.getContext('2d', {
         willReadFrequently: true,
@@ -150,7 +148,6 @@ export class MattingCanvasManager {
     this._snapshotCanvasCtx = undefined
     this._motionCanvas = undefined
     this._motionCanvasCtx = undefined
-    this._segmentationMaskCanvas = undefined
     this._segmentationMaskCanvasCtx = undefined
     this._passthroughMask = undefined
   }

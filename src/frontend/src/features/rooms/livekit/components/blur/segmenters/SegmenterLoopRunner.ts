@@ -2,7 +2,6 @@ import { Segmenter } from './Segmenter'
 import { PreProcessingPipeline } from '../preprocessing/PreProcessingPipeline'
 import { MattingCanvasManager } from '../preprocessing/MattingCanvasManager'
 import { VideoFrameTracker } from '../preprocessing/VideoFrameTracker'
-import { pushMattingError } from '../errors/MattingErrorStore'
 
 export interface FrameMaskPair {
   mask: Float32Array
