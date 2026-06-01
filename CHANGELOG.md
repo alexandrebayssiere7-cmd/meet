@@ -10,6 +10,7 @@ and this project adheres to
 
 ### Added
 
+- ✨(frontend) add GPU video matting pipeline (blur & virtual bg)
 - 🔒️(backend) add validation of Room.configuration
 - ✨(helm) add support multiple transcribe worker / endpoint #1247
 
