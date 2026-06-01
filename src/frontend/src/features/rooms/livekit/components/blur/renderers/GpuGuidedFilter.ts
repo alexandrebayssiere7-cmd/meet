@@ -1,25 +1,44 @@
 /**
- * GPU implementation of the guided filter for mask upsampling.
+ * GPU implementation of the fast guided filter (He & Sun, 2015) for mask
+ * upsampling from processing resolution to full output resolution.
+ *
+ * Called by: WebGl2Renderer._upsampleMask() — lazily instantiated on the
+ * first render call after init.
+ *
+ * Pipeline role: Sits between MaskPostProcessor and the final composite
+ * shader. Upsamples the low-resolution mask (procW×procH) to full output
+ * resolution (outW×outH) using the RGB video frame as a guide image so
+ * fine-detail edges (hair, shoulders) are preserved rather than bilinearly
+ * blurred.
  *
  * Upsamples a low-resolution mask (procW×procH) to full output resolution
- * (outW×outH) using the full-resolution RGB video frame as guide.
+ * (outW×outH) using the RGB video frame as guide.
+ *
+ * Speed trick: the expensive box-filtered statistics (stats1..4, solve, coeff
+ * smoothing) run at LOW resolution (statsW×statsH ≈ outW/2). The final "apply"
+ * pass runs at FULL resolution, sampling the LOW-res coefficient texture with
+ * LINEAR filtering — GL bilinearly upsamples a,b for free — and the FULL-res
+ * video as the guide. Result: ~4× less compute, edge precision preserved
+ * because the final pixel-wise application still uses the full-res guide.
  *
  * Algorithm (He et al., 2013 — RGB variant):
- *   For each window W_k of radius r centred at pixel k in the guide I=[R,G,B]:
+ *   For each window W_k of radius r centred at pixel k in the LOW-res guide I=[R,G,B]:
  *     Σ_k  = RGB covariance matrix of I in W_k  + ε·I₃
  *     c_k  = [cov(R,p), cov(G,p), cov(B,p)] in W_k  (p = bilinear-upsampled mask)
  *     a_k  = Σ_k⁻¹ · c_k        (3-vector)
  *     b_k  = mean_p - a_k · mean_I
- *   Output: q(x) = mean_{k∈W_x}(a_k) · I(x) + mean_{k∈W_x}(b_k)
+ *   Output: q(x) = mean_{k∈W_x}(a_k) · I_full(x) + mean_{k∈W_x}(b_k)   [@ full res]
  *
- * Passes (all at outW×outH, RGBA32F intermediates):
+ * Passes:
+ *   ─ stats/coeff at statsW×statsH, RGBA16F ─
  *   H/V box of (R, G, B, p)        → stats1
  *   H/V box of (R², RG, RB, G²)    → stats2
  *   H/V box of (GB, B², Rp, Gp)    → stats3
  *   H/V box of (Bp)                → stats4
  *   solve a,b from stats            → coeff
- *   H/V box of (a_r, a_g, a_b, b)  → coeffMean
- *   apply: q = coeffMean·I + b      → out  (.r channel = upsampled mask)
+ *   H/V box of (a_r, a_g, a_b, b)  → coeffMean   (LINEAR filter)
+ *   ─ apply at outW×outH, RGBA16F ─
+ *   apply: q = coeffMean·I_full + b → out  (.r channel = upsampled mask)
  *
  * Requires EXT_color_buffer_float (WebGL2, widely supported).
  */
@@ -198,10 +217,15 @@ void main() {
 
 export class GpuGuidedFilter {
   private gl: WebGL2RenderingContext
+  // Low-res "stats" plane: every box-filter pass (the expensive part) runs here.
+  private statsW: number
+  private statsH: number
+  // Full-res "apply" plane: only the final per-pixel apply pass renders here.
   private outW: number
   private outH: number
 
-  // Intermediate textures (all RGBA32F at outW×outH)
+  // Intermediate textures (RGBA16F). All stats/coeff textures are at statsW×statsH.
+  // gfOut is at outW×outH (final apply pass writes here).
   private gfH!: WebGLTexture
   private gfStats1!: WebGLTexture
   private gfStats2!: WebGLTexture
@@ -231,41 +255,74 @@ export class GpuGuidedFilter {
   private pApply!: WebGLProgram
 
   // Cached uniform locations — resolved once in _build(), reused every frame.
-  private uHStats1!: { uVideo: WebGLUniformLocation | null; uMask: WebGLUniformLocation | null; uTexelX: WebGLUniformLocation | null; uRadius: WebGLUniformLocation | null }
-  private uHStats2!: { uVideo: WebGLUniformLocation | null; uTexelX: WebGLUniformLocation | null; uRadius: WebGLUniformLocation | null }
-  private uHStats3!: { uVideo: WebGLUniformLocation | null; uMask: WebGLUniformLocation | null; uTexelX: WebGLUniformLocation | null; uRadius: WebGLUniformLocation | null }
-  private uHStats4!: { uVideo: WebGLUniformLocation | null; uMask: WebGLUniformLocation | null; uTexelX: WebGLUniformLocation | null; uRadius: WebGLUniformLocation | null }
-  private uBox!: { uTex: WebGLUniformLocation | null; uDir: WebGLUniformLocation | null; uRadius: WebGLUniformLocation | null }
-  private uSolve!: { uStats1: WebGLUniformLocation | null; uStats2: WebGLUniformLocation | null; uStats3: WebGLUniformLocation | null; uStats4: WebGLUniformLocation | null; uEps: WebGLUniformLocation | null }
-  private uApply!: { uVideo: WebGLUniformLocation | null; uCoeffMean: WebGLUniformLocation | null }
+  private uHStats1!: {
+    uVideo: WebGLUniformLocation | null
+    uMask: WebGLUniformLocation | null
+    uTexelX: WebGLUniformLocation | null
+    uRadius: WebGLUniformLocation | null
+  }
+  private uHStats2!: {
+    uVideo: WebGLUniformLocation | null
+    uTexelX: WebGLUniformLocation | null
+    uRadius: WebGLUniformLocation | null
+  }
+  private uHStats3!: {
+    uVideo: WebGLUniformLocation | null
+    uMask: WebGLUniformLocation | null
+    uTexelX: WebGLUniformLocation | null
+    uRadius: WebGLUniformLocation | null
+  }
+  private uHStats4!: {
+    uVideo: WebGLUniformLocation | null
+    uMask: WebGLUniformLocation | null
+    uTexelX: WebGLUniformLocation | null
+    uRadius: WebGLUniformLocation | null
+  }
+  private uBox!: {
+    uTex: WebGLUniformLocation | null
+    uDir: WebGLUniformLocation | null
+    uRadius: WebGLUniformLocation | null
+  }
+  private uSolve!: {
+    uStats1: WebGLUniformLocation | null
+    uStats2: WebGLUniformLocation | null
+    uStats3: WebGLUniformLocation | null
+    uStats4: WebGLUniformLocation | null
+    uEps: WebGLUniformLocation | null
+  }
+  private uApply!: {
+    uVideo: WebGLUniformLocation | null
+    uCoeffMean: WebGLUniformLocation | null
+  }
 
-  /**
-   * Create a GpuGuidedFilter for the given WebGL2 context and output dimensions.
-   * Allocates all intermediate RGBA32F textures and FBOs, compiles and links
-   * all GLSL programs. Throws if `EXT_color_buffer_float` is unavailable.
-   *
-   * @param gl    An active WebGL2 rendering context.
-   * @param outW  Output width in pixels (same as guide image width).
-   * @param outH  Output height in pixels (same as guide image height).
-   */
-  constructor(gl: WebGL2RenderingContext, outW: number, outH: number) {
+  constructor(
+    gl: WebGL2RenderingContext,
+    statsW: number,
+    statsH: number,
+    outW: number,
+    outH: number
+  ) {
     this.gl = gl
+    this.statsW = statsW
+    this.statsH = statsH
     this.outW = outW
     this.outH = outH
     this._build()
   }
 
   /**
-   * Run guided filter upsampling.
-   * @param videoTex  Full-res RGBA8 video texture (outW×outH).
-   * @param maskTex   Low-res R8 mask texture (procW×procH), LINEAR filtered.
-   * @param radius    Box filter radius in output pixels.
-   * @param eps       Regularisation ε.
-   * @param vao       The full-screen triangle VAO from the parent renderer.
-   * @returns         RGBA32F texture (outW×outH) whose .r channel is the upsampled mask.
+   * Run fast guided filter upsampling.
+   * @param videoTexLow   Low-res RGBA8 guide (statsW×statsH) — used by stats passes.
+   * @param videoTexFull  Full-res RGBA8 guide (outW×outH) — used by the apply pass.
+   * @param maskTex       Low-res R8 mask texture (procW×procH), LINEAR filtered.
+   * @param radius        Box filter radius in LOW-res pixels (covers 2r LOW pixels = 4r FULL).
+   * @param eps           Regularisation ε.
+   * @param vao           The full-screen triangle VAO from the parent renderer.
+   * @returns             RGBA16F texture (outW×outH) whose .r channel is the upsampled mask.
    */
   run(
-    videoTex: WebGLTexture,
+    videoTexLow: WebGLTexture,
+    videoTexFull: WebGLTexture,
     maskTex: WebGLTexture,
     radius: number,
     eps: number,
@@ -273,10 +330,11 @@ export class GpuGuidedFilter {
   ): WebGLTexture {
     const gl = this.gl
     const r = Math.max(1, Math.round(radius))
-    const texelX = 1.0 / this.outW
-    const texelY = 1.0 / this.outH
+    const texelX = 1.0 / this.statsW
+    const texelY = 1.0 / this.statsH
 
-    gl.viewport(0, 0, this.outW, this.outH)
+    // All stats and coeff passes render at low resolution.
+    gl.viewport(0, 0, this.statsW, this.statsH)
 
     const draw = () => {
       gl.bindVertexArray(vao)
@@ -291,10 +349,10 @@ export class GpuGuidedFilter {
     // ── stats1: box(R, G, B, p) ──────────────────────────────────────────────
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboH)
     gl.useProgram(this.pHStats1)
-    bindTex(0, videoTex)
+    bindTex(0, videoTexLow)
     bindTex(1, maskTex)
-    gl.uniform1i(this.uHStats1.uVideo,  0)
-    gl.uniform1i(this.uHStats1.uMask,   1)
+    gl.uniform1i(this.uHStats1.uVideo, 0)
+    gl.uniform1i(this.uHStats1.uMask, 1)
     gl.uniform1f(this.uHStats1.uTexelX, texelX)
     gl.uniform1i(this.uHStats1.uRadius, r)
     draw()
@@ -302,16 +360,16 @@ export class GpuGuidedFilter {
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboStats1)
     gl.useProgram(this.pBox)
     bindTex(0, this.gfH)
-    gl.uniform1i(this.uBox.uTex,    0)
-    gl.uniform2f(this.uBox.uDir,    0, texelY)
+    gl.uniform1i(this.uBox.uTex, 0)
+    gl.uniform2f(this.uBox.uDir, 0, texelY)
     gl.uniform1i(this.uBox.uRadius, r)
     draw()
 
     // ── stats2: box(R², RG, RB, G²) ─────────────────────────────────────────
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboH)
     gl.useProgram(this.pHStats2)
-    bindTex(0, videoTex)
-    gl.uniform1i(this.uHStats2.uVideo,  0)
+    bindTex(0, videoTexLow)
+    gl.uniform1i(this.uHStats2.uVideo, 0)
     gl.uniform1f(this.uHStats2.uTexelX, texelX)
     gl.uniform1i(this.uHStats2.uRadius, r)
     draw()
@@ -319,18 +377,18 @@ export class GpuGuidedFilter {
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboStats2)
     gl.useProgram(this.pBox)
     bindTex(0, this.gfH)
-    gl.uniform1i(this.uBox.uTex,    0)
-    gl.uniform2f(this.uBox.uDir,    0, texelY)
+    gl.uniform1i(this.uBox.uTex, 0)
+    gl.uniform2f(this.uBox.uDir, 0, texelY)
     gl.uniform1i(this.uBox.uRadius, r)
     draw()
 
     // ── stats3: box(GB, B², Rp, Gp) ─────────────────────────────────────────
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboH)
     gl.useProgram(this.pHStats3)
-    bindTex(0, videoTex)
+    bindTex(0, videoTexLow)
     bindTex(1, maskTex)
-    gl.uniform1i(this.uHStats3.uVideo,  0)
-    gl.uniform1i(this.uHStats3.uMask,   1)
+    gl.uniform1i(this.uHStats3.uVideo, 0)
+    gl.uniform1i(this.uHStats3.uMask, 1)
     gl.uniform1f(this.uHStats3.uTexelX, texelX)
     gl.uniform1i(this.uHStats3.uRadius, r)
     draw()
@@ -338,18 +396,18 @@ export class GpuGuidedFilter {
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboStats3)
     gl.useProgram(this.pBox)
     bindTex(0, this.gfH)
-    gl.uniform1i(this.uBox.uTex,    0)
-    gl.uniform2f(this.uBox.uDir,    0, texelY)
+    gl.uniform1i(this.uBox.uTex, 0)
+    gl.uniform2f(this.uBox.uDir, 0, texelY)
     gl.uniform1i(this.uBox.uRadius, r)
     draw()
 
     // ── stats4: box(Bp) ──────────────────────────────────────────────────────
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboH)
     gl.useProgram(this.pHStats4)
-    bindTex(0, videoTex)
+    bindTex(0, videoTexLow)
     bindTex(1, maskTex)
-    gl.uniform1i(this.uHStats4.uVideo,  0)
-    gl.uniform1i(this.uHStats4.uMask,   1)
+    gl.uniform1i(this.uHStats4.uVideo, 0)
+    gl.uniform1i(this.uHStats4.uMask, 1)
     gl.uniform1f(this.uHStats4.uTexelX, texelX)
     gl.uniform1i(this.uHStats4.uRadius, r)
     draw()
@@ -357,8 +415,8 @@ export class GpuGuidedFilter {
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboStats4)
     gl.useProgram(this.pBox)
     bindTex(0, this.gfH)
-    gl.uniform1i(this.uBox.uTex,    0)
-    gl.uniform2f(this.uBox.uDir,    0, texelY)
+    gl.uniform1i(this.uBox.uTex, 0)
+    gl.uniform2f(this.uBox.uDir, 0, texelY)
     gl.uniform1i(this.uBox.uRadius, r)
     draw()
 
@@ -373,82 +431,99 @@ export class GpuGuidedFilter {
     gl.uniform1i(this.uSolve.uStats2, 1)
     gl.uniform1i(this.uSolve.uStats3, 2)
     gl.uniform1i(this.uSolve.uStats4, 3)
-    gl.uniform1f(this.uSolve.uEps,    eps)
+    gl.uniform1f(this.uSolve.uEps, eps)
     draw()
 
     // ── box filter a, b ──────────────────────────────────────────────────────
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboH)
     gl.useProgram(this.pBox)
     bindTex(0, this.gfCoeff)
-    gl.uniform1i(this.uBox.uTex,    0)
-    gl.uniform2f(this.uBox.uDir,    texelX, 0)
+    gl.uniform1i(this.uBox.uTex, 0)
+    gl.uniform2f(this.uBox.uDir, texelX, 0)
     gl.uniform1i(this.uBox.uRadius, r)
     draw()
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboCoeffMean)
     gl.useProgram(this.pBox)
     bindTex(0, this.gfH)
-    gl.uniform1i(this.uBox.uTex,    0)
-    gl.uniform2f(this.uBox.uDir,    0, texelY)
+    gl.uniform1i(this.uBox.uTex, 0)
+    gl.uniform2f(this.uBox.uDir, 0, texelY)
     gl.uniform1i(this.uBox.uRadius, r)
     draw()
 
-    // ── apply q = coeffMean · I + b ──────────────────────────────────────────
+    // ── apply q = coeffMean · I + b   (FULL-res; coeffMean is bilinearly upsampled by GL) ──
+    gl.viewport(0, 0, this.outW, this.outH)
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboOut)
     gl.useProgram(this.pApply)
-    bindTex(0, videoTex)
+    bindTex(0, videoTexFull)
     bindTex(1, this.gfCoeffMean)
-    gl.uniform1i(this.uApply.uVideo,     0)
+    gl.uniform1i(this.uApply.uVideo, 0)
     gl.uniform1i(this.uApply.uCoeffMean, 1)
     draw()
 
     return this.gfOut
   }
 
-  /**
-   * Delete all GPU resources (textures, FBOs, programs) held by this filter.
-   * The instance must not be used after calling this method.
-   */
   destroy() {
     const gl = this.gl
     const textures = [
-      this.gfH, this.gfStats1, this.gfStats2, this.gfStats3,
-      this.gfStats4, this.gfCoeff, this.gfCoeffMean, this.gfOut,
+      this.gfH,
+      this.gfStats1,
+      this.gfStats2,
+      this.gfStats3,
+      this.gfStats4,
+      this.gfCoeff,
+      this.gfCoeffMean,
+      this.gfOut,
     ]
     for (const t of textures) if (t) gl.deleteTexture(t)
     const fbos = [
-      this.fboH, this.fboStats1, this.fboStats2, this.fboStats3,
-      this.fboStats4, this.fboCoeff, this.fboCoeffMean, this.fboOut,
+      this.fboH,
+      this.fboStats1,
+      this.fboStats2,
+      this.fboStats3,
+      this.fboStats4,
+      this.fboCoeff,
+      this.fboCoeffMean,
+      this.fboOut,
     ]
     for (const f of fbos) if (f) gl.deleteFramebuffer(f)
     const programs = [
-      this.pHStats1, this.pHStats2, this.pHStats3, this.pHStats4,
-      this.pBox, this.pSolve, this.pApply,
+      this.pHStats1,
+      this.pHStats2,
+      this.pHStats3,
+      this.pHStats4,
+      this.pBox,
+      this.pSolve,
+      this.pApply,
     ]
     for (const p of programs) if (p) gl.deleteProgram(p)
   }
 
   // ─── internals ────────────────────────────────────────────────────────────
 
-  /**
-   * Allocate all textures, FBOs, and compile all shader programs.
-   * Called once in the constructor. Throws on unsupported extensions or
-   * shader compilation / program linking errors.
-   */
   private _build() {
     const gl = this.gl
 
     if (!gl.getExtension('EXT_color_buffer_float')) {
-      throw new Error('EXT_color_buffer_float not supported — guided upsampling unavailable')
+      throw new Error(
+        'EXT_color_buffer_float not supported — guided upsampling unavailable'
+      )
     }
 
-    const makeTex = () => {
+    const makeTex = (w: number, h: number) => {
       const t = gl.createTexture()!
       gl.bindTexture(gl.TEXTURE_2D, t)
       gl.texImage2D(
-        gl.TEXTURE_2D, 0, gl.RGBA32F,
-        this.outW, this.outH, 0,
-        gl.RGBA, gl.FLOAT, null
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA16F,
+        w,
+        h,
+        0,
+        gl.RGBA,
+        gl.HALF_FLOAT,
+        null
       )
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
@@ -460,7 +535,13 @@ export class GpuGuidedFilter {
     const makeFbo = (tex: WebGLTexture) => {
       const f = gl.createFramebuffer()!
       gl.bindFramebuffer(gl.FRAMEBUFFER, f)
-      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0)
+      gl.framebufferTexture2D(
+        gl.FRAMEBUFFER,
+        gl.COLOR_ATTACHMENT0,
+        gl.TEXTURE_2D,
+        tex,
+        0
+      )
       const s = gl.checkFramebufferStatus(gl.FRAMEBUFFER)
       if (s !== gl.FRAMEBUFFER_COMPLETE) {
         throw new Error(`GF FBO incomplete: 0x${s.toString(16)}`)
@@ -468,23 +549,36 @@ export class GpuGuidedFilter {
       return f
     }
 
-    this.gfH         = makeTex()
-    this.gfStats1    = makeTex()
-    this.gfStats2    = makeTex()
-    this.gfStats3    = makeTex()
-    this.gfStats4    = makeTex()
-    this.gfCoeff     = makeTex()
-    this.gfCoeffMean = makeTex()
-    this.gfOut       = makeTex()
+    // Stats & coeff intermediates: low-res (the expensive box-filter plane).
+    this.gfH = makeTex(this.statsW, this.statsH)
+    this.gfStats1 = makeTex(this.statsW, this.statsH)
+    this.gfStats2 = makeTex(this.statsW, this.statsH)
+    this.gfStats3 = makeTex(this.statsW, this.statsH)
+    this.gfStats4 = makeTex(this.statsW, this.statsH)
+    this.gfCoeff = makeTex(this.statsW, this.statsH)
+    this.gfCoeffMean = makeTex(this.statsW, this.statsH)
+    // gfCoeffMean is sampled at FULL-res UV by the apply pass → LINEAR makes GL
+    // bilinearly upsample the (a, b) coefficients for free. This is the key
+    // fast-guided-filter trick: cheap stats at low res, exact apply at full res.
+    gl.bindTexture(gl.TEXTURE_2D, this.gfCoeffMean)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
 
-    this.fboH         = makeFbo(this.gfH)
-    this.fboStats1    = makeFbo(this.gfStats1)
-    this.fboStats2    = makeFbo(this.gfStats2)
-    this.fboStats3    = makeFbo(this.gfStats3)
-    this.fboStats4    = makeFbo(this.gfStats4)
-    this.fboCoeff     = makeFbo(this.gfCoeff)
+    // Final output: full-res. LINEAR so downstream compositor can read with
+    // sub-pixel mask-warp offsets without aliasing.
+    this.gfOut = makeTex(this.outW, this.outH)
+    gl.bindTexture(gl.TEXTURE_2D, this.gfOut)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+
+    this.fboH = makeFbo(this.gfH)
+    this.fboStats1 = makeFbo(this.gfStats1)
+    this.fboStats2 = makeFbo(this.gfStats2)
+    this.fboStats3 = makeFbo(this.gfStats3)
+    this.fboStats4 = makeFbo(this.gfStats4)
+    this.fboCoeff = makeFbo(this.gfCoeff)
     this.fboCoeffMean = makeFbo(this.gfCoeffMean)
-    this.fboOut       = makeFbo(this.gfOut)
+    this.fboOut = makeFbo(this.gfOut)
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, null)
 
@@ -492,39 +586,39 @@ export class GpuGuidedFilter {
     this.pHStats2 = this._link(VS, FS_H_STATS2)
     this.pHStats3 = this._link(VS, FS_H_STATS3)
     this.pHStats4 = this._link(VS, FS_H_STATS4)
-    this.pBox     = this._link(VS, FS_BOX)
-    this.pSolve   = this._link(VS, FS_SOLVE)
-    this.pApply   = this._link(VS, FS_APPLY)
+    this.pBox = this._link(VS, FS_BOX)
+    this.pSolve = this._link(VS, FS_SOLVE)
+    this.pApply = this._link(VS, FS_APPLY)
 
     // Cache all uniform locations once — avoids per-frame string lookups
     // through the GL driver which can stall the CPU-GPU pipeline.
     const loc = (p: WebGLProgram, n: string) => gl.getUniformLocation(p, n)
     this.uHStats1 = {
-      uVideo:  loc(this.pHStats1, 'uVideo'),
-      uMask:   loc(this.pHStats1, 'uMask'),
+      uVideo: loc(this.pHStats1, 'uVideo'),
+      uMask: loc(this.pHStats1, 'uMask'),
       uTexelX: loc(this.pHStats1, 'uTexelX'),
       uRadius: loc(this.pHStats1, 'uRadius'),
     }
     this.uHStats2 = {
-      uVideo:  loc(this.pHStats2, 'uVideo'),
+      uVideo: loc(this.pHStats2, 'uVideo'),
       uTexelX: loc(this.pHStats2, 'uTexelX'),
       uRadius: loc(this.pHStats2, 'uRadius'),
     }
     this.uHStats3 = {
-      uVideo:  loc(this.pHStats3, 'uVideo'),
-      uMask:   loc(this.pHStats3, 'uMask'),
+      uVideo: loc(this.pHStats3, 'uVideo'),
+      uMask: loc(this.pHStats3, 'uMask'),
       uTexelX: loc(this.pHStats3, 'uTexelX'),
       uRadius: loc(this.pHStats3, 'uRadius'),
     }
     this.uHStats4 = {
-      uVideo:  loc(this.pHStats4, 'uVideo'),
-      uMask:   loc(this.pHStats4, 'uMask'),
+      uVideo: loc(this.pHStats4, 'uVideo'),
+      uMask: loc(this.pHStats4, 'uMask'),
       uTexelX: loc(this.pHStats4, 'uTexelX'),
       uRadius: loc(this.pHStats4, 'uRadius'),
     }
     this.uBox = {
-      uTex:    loc(this.pBox, 'uTex'),
-      uDir:    loc(this.pBox, 'uDir'),
+      uTex: loc(this.pBox, 'uTex'),
+      uDir: loc(this.pBox, 'uDir'),
       uRadius: loc(this.pBox, 'uRadius'),
     }
     this.uSolve = {
@@ -532,21 +626,14 @@ export class GpuGuidedFilter {
       uStats2: loc(this.pSolve, 'uStats2'),
       uStats3: loc(this.pSolve, 'uStats3'),
       uStats4: loc(this.pSolve, 'uStats4'),
-      uEps:    loc(this.pSolve, 'uEps'),
+      uEps: loc(this.pSolve, 'uEps'),
     }
     this.uApply = {
-      uVideo:     loc(this.pApply, 'uVideo'),
+      uVideo: loc(this.pApply, 'uVideo'),
       uCoeffMean: loc(this.pApply, 'uCoeffMean'),
     }
   }
 
-  /**
-   * Compile a single GLSL shader stage. Throws with the info log on failure.
-   *
-   * @param stage Either `gl.VERTEX_SHADER` or `gl.FRAGMENT_SHADER`.
-   * @param src   GLSL source code string.
-   * @returns     The compiled `WebGLShader`.
-   */
   private _compile(stage: number, src: string): WebGLShader {
     const gl = this.gl
     const sh = gl.createShader(stage)!
@@ -560,14 +647,6 @@ export class GpuGuidedFilter {
     return sh
   }
 
-  /**
-   * Link a vertex + fragment shader into a `WebGLProgram`. Throws on failure.
-   * The individual shaders are deleted after linking regardless of outcome.
-   *
-   * @param vsSrc Vertex shader GLSL source.
-   * @param fsSrc Fragment shader GLSL source.
-   * @returns     The linked `WebGLProgram`.
-   */
   private _link(vsSrc: string, fsSrc: string): WebGLProgram {
     const gl = this.gl
     const vs = this._compile(gl.VERTEX_SHADER, vsSrc)
