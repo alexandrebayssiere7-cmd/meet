@@ -254,49 +254,6 @@
     "notAvailable": "Video effects will be available soon on your browser. We're working on it! In the meantime, you can use Google Chrome for best performance or Firefox :(",
     "heading": "Blur",
     "clear": "Disable effect",
-    "advanced": {
-      "title": "Advanced settings",
-      "model": {
-        "title": "Segmentation model",
-        "auto": "Optimized (automatic)",
-        "landscape": "Landscape (fast)",
-        "multiclass": "Multiclass (quality)",
-        "rvm": "RVM (recurrent, higher quality)"
-      },
-      "rvmDownsample": {
-        "manual": "Manual downsample ratio",
-        "label": "Downsample ratio (RVM)"
-      },
-      "sync": {
-        "title": "Mask / frame synchronization"
-      },
-      "preProcessing": {
-        "title": "Pre-processing",
-        "roiCropping": "Person crop (ROI)"
-      },
-      "postProcessing": {
-        "title": "Post-processing",
-        "sigmoid": "Sigmoid",
-        "erosion": "Edge erosion",
-        "ema": "EMA"
-      },
-      "upsampling": {
-        "title": "Upsampling",
-        "guidedFilter": "Guided Filter (GPU)"
-      },
-      "params": {
-        "sigmoidSteepness": "Sigmoid steepness",
-        "sigmoidThreshold": "Sigmoid threshold",
-        "erosionPixels": "Pixels removed (edges)",
-        "emaAlpha": "Responsiveness (EMA)",
-        "blurRadius": "Blur intensity",
-        "upsamplingRadius": "Radius (Guided Filter)",
-        "upsamplingEps": "Regularization (Guided Filter)",
-        "maxFrameOffset": "Max mask / frame offset (frames)",
-        "maxFrameOffsetStrict": "locked"
-      },
-      "apply": "Apply"
-    },
     "blur": {
       "title": "Background blur",
       "status": {
@@ -348,6 +305,14 @@
           "6": "Gray library",
           "7": "Coffee counter"
         }
+      },
+      "themes": {
+        "interior": "Interior & Office",
+        "nature": "Nature",
+        "urban": "City & Urban",
+        "abstract": "Abstract",
+        "tech": "Technology",
+        "childhood": "Childhood"
       }
     },
     "matting": {
@@ -356,7 +321,8 @@
         "WEBGL2_INIT_FAILED": "WebGL2 is not available in this browser. The video effect cannot be applied.",
         "CAPTURESTREAM_UNSUPPORTED": "This browser does not support the video capture required for processing.",
         "VIRTUAL_BG_LOAD_FAILED": "The background image could not be loaded.",
-        "POSTPROCESS_SHADER_COMPILE_FAILED": "A GPU error is preventing the effect from working."
+        "POSTPROCESS_SHADER_COMPILE_FAILED": "A GPU error is preventing the effect from working.",
+        "CANVAS2D_FALLBACK": "GPU rendering unavailable, falling back to Canvas2D. Performance may be reduced."
       }
     },
     "faceLandmarks": {

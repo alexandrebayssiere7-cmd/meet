@@ -211,13 +211,11 @@ export const Home = () => {
                       }
                       onAction={async () => {
                         const slug = generateRoomId()
-                        createRoom({ slug, username })
-                          .then((data) =>
-                            navigateTo('room', data.slug, {
-                              state: { create: true, initialRoomData: data },
-                            })
-                          )
-                          .catch(console.error)
+                        createRoom({ slug, username }).then((data) =>
+                          navigateTo('room', data.slug, {
+                            state: { create: true, initialRoomData: data },
+                          })
+                        )
                       }}
                       data-attr="create-option-instant"
                     >
@@ -230,9 +228,9 @@ export const Home = () => {
                       }
                       onAction={() => {
                         const slug = generateRoomId()
-                        createRoom({ slug, username })
-                          .then((data) => setLaterRoom(data))
-                          .catch(console.error)
+                        createRoom({ slug, username }).then((data) =>
+                          setLaterRoom(data)
+                        )
                       }}
                       data-attr="create-option-later"
                     >
