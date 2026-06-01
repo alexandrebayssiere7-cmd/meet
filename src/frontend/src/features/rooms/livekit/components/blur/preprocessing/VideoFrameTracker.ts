@@ -27,7 +27,6 @@ export class VideoFrameTracker {
     promise: Promise<void>
     resolve: () => void
   } | null = null
-  private _onTick?: () => void
 
   get videoFrameSeq(): number {
     return this._videoFrameSeq
@@ -37,9 +36,8 @@ export class VideoFrameTracker {
     return this._latestVideoFrameMeta
   }
 
-  start(videoElement: HTMLVideoElement, onTick?: () => void) {
+  start(videoElement: HTMLVideoElement) {
     this.videoElement = videoElement
-    this._onTick = onTick
     this._videoFrameSeq = 0
     this._latestVideoFrameMeta = undefined
     this._startVideoFrameMetaTracking()
@@ -48,7 +46,6 @@ export class VideoFrameTracker {
   stop() {
     this._stopVideoFrameMetaTracking()
     this.videoElement = undefined
-    this._onTick = undefined
   }
 
   /**
@@ -102,7 +99,6 @@ export class VideoFrameTracker {
         receivedAt: performance.now(),
       }
       this._videoFrameSeq++
-      this._onTick?.()
       if (this._frameAwaiter) {
         const a = this._frameAwaiter
         this._frameAwaiter = null

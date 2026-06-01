@@ -75,5 +75,5 @@ const code = `
 `
 
 export const timerWorkerScript = URL.createObjectURL(
-  new Blob([code], { type: 'application/javascript' })
+    new Blob([code], { type: 'application/javascript' })
 )

@@ -289,13 +289,4 @@ export class RoiCropper {
     }
     this.currentBbox = stabilizeBbox(this.currentBbox, raw)
   }
-
-  reset(): void {
-    this.currentBbox = { ...FULL_FRAME }
-    this.frameCounter = 0
-    this.prevLuma = null
-    this.cooldownFrames = 0
-    this._resizeBuf = null
-    this._fullBuf = null
-  }
 }

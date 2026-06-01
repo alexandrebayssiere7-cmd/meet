@@ -155,7 +155,6 @@ export class SegmenterLoopRunner {
           capturedSource = null
         }
         if (!this._segLoopActive) return
-        console.error('[AMP] segmenter loop error', e)
         console.warn('[matting:SEGMENTER_TIMEOUT_PASSTHROUGH]', e instanceof Error ? `${e.name}: ${e.message}` : String(e))
         await new Promise<void>((r) => setTimeout(r, 100))
         continue

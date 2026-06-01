@@ -165,7 +165,7 @@ export class Canvas2dRenderer implements GpuRenderer {
     if (this.emaAlpha === 0) this.emaPrevMask = null
   }
 
-  setUpsampling(): void {}
+  setUpsampling(): void { }
 
   render(source: RenderSource): void {
     if (!source) return
