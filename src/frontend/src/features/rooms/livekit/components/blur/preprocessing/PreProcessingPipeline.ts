@@ -1,21 +1,25 @@
+/**
+ * Thin facade that orchestrates pre-processing filters applied around the
+ * segmentation model inference step.
+ *
+ * Called by: AdvancedMattingProcessor._applyRendererConfig() (creates it when
+ * roiCropping is enabled), SegmenterLoopRunner (calls getNextCropBbox and
+ * applyAfterInference each frame).
+ *
+ * Pipeline role: Sits between the canvas snapshot and the segmenter. Currently
+ * wraps a single filter (RoiCropper): getNextCropBbox() is called before
+ * sizeSource() to crop the model input, and applyAfterInference() is called
+ * after segment() to remap the crop-space mask back to full-frame space and
+ * update the stable bbox for the next frame.
+ */
 import { PreProcessingConfig } from '..'
 import { BBox, RoiCropper } from './RoiCropper'
 
 /**
- * Orchestrates pre-processing filters applied to the raw video frame
- * before (and surrounding) the segmentation model.
- *
- * Per-frame call order in AdvancedMattingProcessor:
- *
- *   bbox = pipeline.getNextCropBbox()       // used by sizeSource() to crop the video
- *   sizeSource(bbox)                        // extracts crop from full-res video → ImageData
- *   frame = pipeline.apply(frame, prevMask) // frame-level transforms (future techniques)
- *   rawMask = segmenter.segment(frame)      // inference in crop space
- *   guidedFilter(rawMask, frame)            // optional, still in crop space
- *   fullMask = pipeline.applyAfterInference(refinedMask, maskW, maskH, bbox)
- *                                           // remap crop-space mask → full-frame space
- *                                           // + update RoiCropper internal state
- */
+ Orchestrates pre-processing filters applied to the raw video frame
+ before (and surrounding) the segmentation model.
+ Right now, it only is a thin wrapper around RoiCropper. 
+*/
 export class PreProcessingPipeline {
   private roiCropper?: RoiCropper
 
@@ -34,18 +38,6 @@ export class PreProcessingPipeline {
     rgbaH?: number
   ): BBox | null {
     return this.roiCropper?.getNextCropBbox(currentRgba, rgbaW, rgbaH) ?? null
-  }
-
-  /**
-   * Apply frame-level transforms to the already-extracted (and cropped) ImageData.
-   * Add technique calls here as new preprocessing methods are introduced.
-   *
-   * @param frame    RGBA ImageData at processing resolution (already cropped + resized)
-   * @param prevMask Float32Array mask [0, 1] from the previous frame, in full-frame space
-   */
-  apply(frame: ImageData, prevMask?: Float32Array): ImageData {
-    void prevMask
-    return frame
   }
 
   /**
@@ -68,16 +60,15 @@ export class PreProcessingPipeline {
   ): Float32Array {
     if (!this.roiCropper || !usedBbox) return mask
 
-    const full = this.roiCropper.remapMask(mask, maskW, maskH, usedBbox, maskW, maskH)
+    const full = this.roiCropper.remapMask(
+      mask,
+      maskW,
+      maskH,
+      usedBbox,
+      maskW,
+      maskH
+    )
     this.roiCropper.updateWithMask(full, maskW, maskH)
     return full
-  }
-
-  /**
-   * Reset all stateful pre-processors (e.g. RoiCropper bbox history).
-   * Should be called when the segmenter model or processing resolution changes.
-   */
-  reset(): void {
-    this.roiCropper?.reset()
   }
 }

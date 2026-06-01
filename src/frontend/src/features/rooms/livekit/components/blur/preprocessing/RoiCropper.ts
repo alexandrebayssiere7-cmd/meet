@@ -1,43 +1,35 @@
-/** Minimum normalised centre displacement to trigger EMA update (dead-zone). */
+/**
+ * Region-of-Interest (ROI) cropper with dead-zone stabilization.
+ *
+ * Called by: PreProcessingPipeline (wraps RoiCropper in its thin facade).
+ *
+ * Pipeline role: Optional pre-inference step that narrows the segmenter input
+ * to a stabilized bounding box around the person. Per-frame call order:
+ *   1. getNextCropBbox()  — returns the bbox used to crop the video snapshot
+ *   2. model.segment()   — runs on the cropped ImageData
+ *   3. remapMask()        — maps the crop-space mask back to full-frame space
+ *   4. updateWithMask()   — updates the stable bbox for the next frame
+ * Motion outside the current bbox triggers a full-frame reset so sudden
+ * scene changes don't trap the crop on the wrong region.
+ */
 const DEAD_ZONE_POSITION = 0.03
-/** Minimum normalised size delta to trigger EMA update (dead-zone). */
 const DEAD_ZONE_SIZE = 0.015
-/** EMA smoothing factor for bbox position/size updates (0=frozen, 1=instant). */
-const SMOOTHING = 0.5
-/** Extra normalised margin added around the detected person bbox. */
-const BBOX_PADDING = 0.05
-/** Mask confidence threshold above which a pixel is considered "person". */
+const BBOX_PADDING = 0.08
 const MASK_THRESHOLD = 0.5
-/** Per-pixel luma delta (0–255) that counts as a changed pixel during motion check. */
 const MOTION_DIFF_THRESHOLD = 25
-/** Fraction of pixels outside the bbox that must change to trigger full-frame expansion. */
 const MOTION_PIXEL_RATIO = 1 / 16
-/** How often (in frames) the motion check is run. */
 const MOTION_CHECK_INTERVAL = 30
-/** Number of frames to hold the full-frame bbox after a motion-triggered expansion. */
 const EXPANSION_COOLDOWN_FRAMES = 30
 
-/**
- * Axis-aligned bounding box expressed as normalised coordinates in [0, 1].
- * `x` and `y` are the top-left corner; all values are relative to the
- * full image dimensions so the bbox is resolution-independent.
- */
 export interface BBox {
-  x: number      // normalised left edge [0, 1]
-  y: number      // normalised top edge  [0, 1]
-  width: number  // normalised width     [0, 1]
+  x: number // normalised left edge [0, 1]
+  y: number // normalised top edge  [0, 1]
+  width: number // normalised width     [0, 1]
   height: number // normalised height    [0, 1]
 }
 
-/** Sentinel bbox representing the entire frame — used before the first mask is available. */
 const FULL_FRAME: BBox = { x: 0, y: 0, width: 1, height: 1 }
 
-/**
- * Clamp a value to the range [lo, hi].
- * @param v   Value to clamp.
- * @param lo  Lower bound (inclusive).
- * @param hi  Upper bound (inclusive).
- */
 function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v
 }
@@ -49,7 +41,10 @@ export function computePersonBbox(
   maskW: number,
   maskH: number
 ): BBox | null {
-  let minX = maskW, maxX = -1, minY = maskH, maxY = -1
+  let minX = maskW,
+    maxX = -1,
+    minY = maskH,
+    maxY = -1
 
   for (let y = 0; y < maskH; y++) {
     for (let x = 0; x < maskW; x++) {
@@ -93,13 +88,11 @@ export function stabilizeBbox(current: BBox, next: BBox): BBox {
 
   if (!positionMoved && !sizeMoved) return current
 
-  const s = SMOOTHING
-  const inv = 1 - s
   return {
-    x: inv * current.x + s * next.x,
-    y: inv * current.y + s * next.y,
-    width: inv * current.width + s * next.width,
-    height: inv * current.height + s * next.height,
+    x: next.x,
+    y: next.y,
+    width: next.width,
+    height: next.height,
   }
 }
 
@@ -131,8 +124,10 @@ function resizeFloat32Into(
       const ix0 = sx0 < 0 ? 0 : sx0 >= srcW ? srcW - 1 : sx0
       const ix1 = sx1 < 0 ? 0 : sx1 >= srcW ? srcW - 1 : sx1
 
-      const v = (1 - fy) * ((1 - fx) * src[iy0 * srcW + ix0] + fx * src[iy0 * srcW + ix1]) +
-                      fy  * ((1 - fx) * src[iy1 * srcW + ix0] + fx * src[iy1 * srcW + ix1])
+      const v =
+        (1 - fy) *
+          ((1 - fx) * src[iy0 * srcW + ix0] + fx * src[iy0 * srcW + ix1]) +
+        fy * ((1 - fx) * src[iy1 * srcW + ix0] + fx * src[iy1 * srcW + ix1])
       dst[dy * dstW + dx] = v
     }
   }
@@ -149,7 +144,6 @@ function resizeFloat32Into(
  */
 export class RoiCropper {
   private currentBbox: BBox = { ...FULL_FRAME }
-  private hasMask = false
   private frameCounter = 0
   private prevLuma: Uint8Array | null = null
   private cooldownFrames = 0
@@ -173,7 +167,10 @@ export class RoiCropper {
 
     if (this.frameCounter % MOTION_CHECK_INTERVAL === 0) {
       const motionDetected =
-        !!currentRgba && !!rgbaW && !!rgbaH && !!this.prevLuma &&
+        !!currentRgba &&
+        !!rgbaW &&
+        !!rgbaH &&
+        !!this.prevLuma &&
         this._hasMotionOutsideBbox(currentRgba, rgbaW, rgbaH, this.currentBbox)
       this._updatePrevLuma(currentRgba, rgbaW, rgbaH)
       if (motionDetected) {
@@ -186,17 +183,6 @@ export class RoiCropper {
     return { ...this.currentBbox }
   }
 
-  /**
-   * Detect whether a significant number of pixels *outside* the current bbox
-   * have changed luma value compared to the previous frame.
-   * Uses a low-resolution (~128×72) frame for performance.
-   *
-   * @param rgba  RGBA pixel data of the current downsampled frame.
-   * @param w     Frame width in pixels.
-   * @param h     Frame height in pixels.
-   * @param bbox  Normalised bbox of the person — pixels inside are ignored.
-   * @returns     True if `MOTION_PIXEL_RATIO` fraction of outside pixels changed.
-   */
   private _hasMotionOutsideBbox(
     rgba: Uint8ClampedArray,
     w: number,
@@ -221,17 +207,10 @@ export class RoiCropper {
       }
     }
 
-    return changedPixels / (w * h) > MOTION_PIXEL_RATIO
+    const outsidePixels = w * h - (bboxX1 - bboxX0) * (bboxY1 - bboxY0)
+    return outsidePixels > 0 && changedPixels / outsidePixels > MOTION_PIXEL_RATIO
   }
 
-  /**
-   * Store the current frame's per-pixel luma (average of R, G, B) for use in
-   * the next motion check. Allocates or reuses an internal `Uint8Array`.
-   *
-   * @param rgba RGBA pixel data of the current downsampled frame.
-   * @param w    Frame width in pixels.
-   * @param h    Frame height in pixels.
-   */
   private _updatePrevLuma(
     rgba?: Uint8ClampedArray,
     w?: number,
@@ -279,7 +258,14 @@ export class RoiCropper {
     if (!this._resizeBuf || this._resizeBuf.length !== resizeLen) {
       this._resizeBuf = new Float32Array(resizeLen)
     }
-    resizeFloat32Into(cropMask, cropMaskW, cropMaskH, this._resizeBuf, dstW, dstH)
+    resizeFloat32Into(
+      cropMask,
+      cropMaskW,
+      cropMaskH,
+      this._resizeBuf,
+      dstW,
+      dstH
+    )
 
     for (let y = 0; y < dstH; y++) {
       const fy = dstY + y
@@ -296,7 +282,6 @@ export class RoiCropper {
 
   /** Update internal state from the full-frame mask produced this frame. */
   updateWithMask(fullMask: Float32Array, maskW: number, maskH: number): void {
-    this.hasMask = true
     const raw = computePersonBbox(fullMask, maskW, maskH)
     if (!raw) {
       // No person detected — keep current bbox so the crop doesn't jump to full frame.
@@ -305,33 +290,12 @@ export class RoiCropper {
     this.currentBbox = stabilizeBbox(this.currentBbox, raw)
   }
 
-  /**
-   * Reset the cropper to its initial state (full-frame bbox, no motion history).
-   * Must be called when the segmenter model or resolution changes.
-   */
   reset(): void {
     this.currentBbox = { ...FULL_FRAME }
-    this.hasMask = false
     this.frameCounter = 0
     this.prevLuma = null
     this.cooldownFrames = 0
     this._resizeBuf = null
     this._fullBuf = null
-  }
-
-  /**
-   * Returns the current stabilised person bbox (normalised [0, 1]).
-   * Useful for debugging or external visualisation.
-   */
-  getCurrentBbox(): BBox {
-    return this.currentBbox
-  }
-
-  /**
-   * Returns true once the first segmentation mask has been processed and the
-   * internal bbox has been initialised from real data (not the full-frame default).
-   */
-  isInitialised(): boolean {
-    return this.hasMask
   }
 }
