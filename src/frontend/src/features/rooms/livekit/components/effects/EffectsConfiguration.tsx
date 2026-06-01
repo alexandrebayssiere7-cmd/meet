@@ -48,7 +48,7 @@ enum BlurRadius {
 const isSupported = BackgroundProcessorFactory.isSupported()
 
 const BACKGROUND_THEMES: Array<{ key: string; indices: number[] }> = [
-  { key: 'interior', indices: [1, 2, 3, 4, 5, 6, 7, 8, 9] },
+  { key: 'interior', indices: [1, 2, 3, 4, 5, 6, 7, 8] },
   { key: 'nature', indices: [] },
   { key: 'urban', indices: [] },
   { key: 'abstract', indices: [] },
